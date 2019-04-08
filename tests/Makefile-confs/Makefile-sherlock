@@ -1,0 +1,25 @@
+ifndef USE_MKL
+    USE_MKL = 1
+endif
+
+CC = g++ -Wextra -Wnull-dereference -Wno-sign-compare -Wno-int-in-bool-context # Needs gcc/8.* otherwise complex fails, somewhere
+
+ifeq ($(USE_MKL),1)
+    BLASDIR  = ${MKLROOT}/include
+    BLASLIB  = ${MKLROOT}/lib/intel64
+else
+    BLASDIR = /share/software/user/open/openblas/0.3.4/include
+    BLASLIB = /share/software/user/open/openblas/0.3.4/lib
+endif
+
+EIGENDIR = /share/software/user/open/eigen/3.3.3/include/eigen3
+METISDIR = /share/software/user/open/metis/5.1.0/include
+METISLIB = /share/software/user/open/metis/5.1.0/lib 
+GTEST = $(HOME)/spaND/gtest/googletest
+MFEMDIR = $(HOME)/Softwares/mfem-3.4
+MFEMLIB = $(HOME)/Softwares/mfem-3.4
+MMIODIR = $(HOME)/linalgCpp/mmio
+TBBLIB = /share/software/user/restricted/tbb/2019/tbb/lib/intel64/gcc4.7
+TBBDIR = /share/software/user/restricted/tbb/2019/tbb/include
+BOOSTDIR = /share/software/user/open/boost/1.69.0/include
+PTDAGDIR = $(HOME)/ptdag

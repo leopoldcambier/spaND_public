@@ -1,0 +1,15 @@
+USE_MKL = 0
+
+CC = g++
+
+BLASDIR  = /usr/local/opt/openblas/include/
+BLASLIB  = /usr/local/opt/openblas/lib/
+
+EIGENDIR = $(HOME)/Softwares/eigen/
+METISDIR = $(HOME)/Softwares/metis/include
+METISLIB  = $(HOME)/Softwares/metis/libmetis
+GTEST = $(HOME)/Stanford/spaND/gtest/googletest
+MFEMDIR = $(HOME)/Softwares/mfem-3.4
+MFEMLIB = $(HOME)/Softwares/mfem-3.4
+
+MMIODIR = $(HOME)/git/linalgCpp/mmio
