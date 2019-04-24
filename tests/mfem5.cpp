@@ -38,6 +38,7 @@
 #include "tree.h"
 #include "is.h"
 #include "mfem_util.h"
+#include "mmio.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -58,6 +59,9 @@ int main(int argc, char *argv[])
    int order = 1;
    bool visualization = 1;
    int target = 10000;
+   double tol = 1e-2;
+   double sp_eps = 1e-2;
+   int skip = 2;
 
    OptionsParser args(argc, argv);
    args.AddOption(&mesh_file, "-m", "--mesh",
@@ -69,6 +73,12 @@ int main(int argc, char *argv[])
                   "Enable or disable GLVis visualization.");
    args.AddOption(&target, "-t", "--target",
                   "Target FE mesh size");
+   args.AddOption(&tol, "-tol", "--tol",
+                  "spaND tol");
+   args.AddOption(&sp_eps, "-eps", "--eps",
+                  "(1,1) bloc negative shift");
+   args.AddOption(&skip, "-s", "--skip",
+                  "spaND skip");
    
    args.Parse();
    if (!args.Good())
@@ -115,34 +125,6 @@ int main(int argc, char *argv[])
    cout << "W NDof: " << W_space->GetNDofs() << endl;
    cout << "W VSize: " << W_space->GetVSize() << endl;
    cout << "W NV/NE/NF dofs: " << W_space->GetNV() << " " << W_space->GetNE() << " " << W_space->GetNBE() << " " << W_space->GetNF() << endl;
-
-   // Crap
-   // FiniteElementSpace *fes = W_space;
-   // fes->BuildDofToArrays();
-   // int Ndofs = fes->GetNDofs();
-   // vector<vector<int>> dofs2elem(Ndofs);
-   // for(int i = 0; i < fes->GetNE(); i++) {
-   //    Array<int> v;
-   //    fes->GetElementVDofs(i, v);
-   //    cout << i << " " << v.Size() << " " ;
-   //    for(int k = 0; k < v.Size(); k++) {
-   //       int dof = v.GetData()[k];
-   //       cout << dof << " ";
-   //       assert(dof < fes->GetNDofs() && dof > - fes->GetNDofs());
-   //       dof = (dof < 0 ? -1-dof : dof);
-   //       dofs2elem[dof].push_back(i);
-   //    }
-   //    cout << endl;
-   //    // cout << i << " " << R_space->GetElementForDof(i) << endl;
-   // }
-   // for(int i = 0; i < Ndofs; i++) {
-   //    cout << i << " : ";
-   //    for(auto el: dofs2elem[i]) {
-   //       const FiniteElement* fe = fes->GetFE(el);
-   //       cout << el << " (" << fe->GetDim() << ") " ;
-   //    }
-   //    cout << endl;
-   // }
 
    // 5. Define the BlockStructure of the problem, i.e. define the array of
    //    offsets for each variable. The last component of the Array is the sum
@@ -239,37 +221,116 @@ int main(int argc, char *argv[])
          triplets.push_back({it.col()        , Rsize + it.row(), it.value()});
       }
    }
-   // All together
+
+   // All together for A
    SpMat A(Nout, Nout);
    A.setFromTriplets(triplets.begin(), triplets.end());
    cout << A.rows() << "x" << A.cols() << " NNZ ? " << A.nonZeros() << endl;
+
+   // Add negative bottom right diagonal for Aprec
    double Anorm = A.norm();
-   cout << "Norm " << Anorm << endl;
-   for(int i = 0; i < Nout; i++) {
-      triplets.push_back({i,i,0 * Anorm});
+   for(int i = 0; i < Wsize; i++) {
+      triplets.push_back({Rsize + i, Rsize + i, -sp_eps});
    }
    SpMat Aprec(Nout, Nout);
    Aprec.setFromTriplets(triplets.begin(), triplets.end());
 
+   // Get coordinates
+   // For R
+   FiniteElementSpace *R_vfes = new FiniteElementSpace(mesh, hdiv_coll, dim);
+   GridFunction R_coords(R_vfes);
+   {
+      DenseMatrix coords, coords_t;
+      Array<int> rt_vdofs;
+      for (int i = 0; i < mesh->GetNE(); i++)
+      {
+         const FiniteElement *rt_fe = R_vfes->GetFE(i);
+         const IntegrationRule &rt_nodes = rt_fe->GetNodes();
+         ElementTransformation *T = mesh->GetElementTransformation(i);
+         T->Transform(rt_nodes, coords);
+         coords_t.Transpose(coords);
+         R_vfes->GetElementVDofs(i, rt_vdofs);
+         FiniteElementSpace::AdjustVDofs(rt_vdofs);
+         R_coords.SetSubVector(rt_vdofs, coords_t.GetData());
+      }
+   }
+   // For W
+   FiniteElementSpace *W_vfes = new FiniteElementSpace(mesh, l2_coll, dim);
+   GridFunction W_coords(W_vfes);
+   {
+      DenseMatrix coords, coords_t;
+      Array<int> wt_vdofs;
+      for (int i = 0; i < mesh->GetNE(); i++)
+      {
+         const FiniteElement *wt_fe = W_vfes->GetFE(i);
+         const IntegrationRule &wt_nodes = wt_fe->GetNodes();
+         ElementTransformation *T = mesh->GetElementTransformation(i);
+         T->Transform(wt_nodes, coords);
+         coords_t.Transpose(coords);
+         W_vfes->GetElementVDofs(i, wt_vdofs);
+         W_coords.SetSubVector(wt_vdofs, coords_t.GetData());
+      }
+   }
+
+   // Build Xcoord
+   Eigen::MatrixXd Xcoo = Eigen::MatrixXd::Zero(dim, Nout);
+   assert(Rsize == R_coords.Size() / dim);
+   assert(Wsize == W_coords.Size() / dim);   
+   for(int i = 0; i < Rsize; i++) {
+      for(int d = 0; d < dim; d++) {
+         Xcoo(d, i) = R_coords.GetData()[i + d * Rsize];
+      }
+   }
+   for(int i = 0; i < Wsize; i++) {
+      for(int d = 0; d < dim; d++) {
+         Xcoo(d, Rsize + i) = W_coords.GetData()[i + d * Wsize];
+      }
+   }
+   cout << Xcoo.leftCols(10) << endl;
+   cout << Xcoo.rightCols(10) << endl;
+
+#if 0
+      cout << "***********" << endl;
+      cout << "R_coords.Size() = " << R_coords.Size() << endl;
+      cout << "W_coords.Size() = " << W_coords.Size() << endl;
+      std::ofstream Rfs("R_coords.txt", std::ofstream::out);
+      Rfs << R_coords;
+      Rfs.close();
+      std::ofstream Wfs("W_coords.txt", std::ofstream::out);
+      Wfs << W_coords;
+      Wfs.close();
+      mmio::sp_mmwrite("A.txt", Aprec);
+      cout << "***********" << endl;
+#endif
+   
    // Try solving
    SpMat AAT = symmetric_graph(Aprec);
-   int lvl = (int)ceil(log( double(Nout) / 64.0)/log(2.0));     
+   int lvl = (int)ceil(log( double(Nout) / 64.0)/log(2.0))-2;     
    Tree t(lvl);
-   t.set_symmetry(false);
-   t.set_tol(0.001);
-   t.set_skip(0);
-   // t.set_Xcoo(&Xcoo);
-   t.set_use_geo(false);
+   t.set_symm_kind(SymmKind::GEN);
+   t.set_tol(tol);
+   t.set_skip(skip);
+   t.set_Xcoo(&Xcoo);
+   t.set_use_geo(true);
    t.partition(AAT);
    t.assemble(Aprec);
+   t.set_monitor_condition_pivots(true);
+   t.set_scaling_kind(ScalingKind::SVD);
    int err = t.factorize();
    if(err != 0) {
       exit(err);
    }
+   t.print_log();
    Eigen::VectorXd rhse = mfem2eigen(rhs);
    Eigen::VectorXd sole = Eigen::VectorXd::Zero(rhse.rows());
-   int iter = gmres(A, rhse, sole, t, 100, 100, 1e-9, true);
+   int iter = gmres(A, rhse, sole, t, 100, 100, 1e-12, true);
    cout << "GMRES: " << iter << " |Ax-b|/|b|: " << (A*sole-rhse).norm() / rhse.norm() << endl;
+
+   {
+      for(int i = 0; i < Nout; i++) {
+         x.Elem(i) = sole[i];
+      }
+   }
 
    // 9. Construct the operators for preconditioner
    //
@@ -278,56 +339,56 @@ int main(int argc, char *argv[])
    //
    //     Here we use Symmetric Gauss-Seidel to approximate the inverse of the
    //     pressure Schur Complement
-   SparseMatrix *MinvBt = Transpose(B);
-   Vector Md(M.Height());
-   M.GetDiag(Md);
-   for (int i = 0; i < Md.Size(); i++)
-   {
-      MinvBt->ScaleRow(i, 1./Md(i));
-   }
-   SparseMatrix *S = Mult(B, *MinvBt);
+//    SparseMatrix *MinvBt = Transpose(B);
+//    Vector Md(M.Height());
+//    M.GetDiag(Md);
+//    for (int i = 0; i < Md.Size(); i++)
+//    {
+//       MinvBt->ScaleRow(i, 1./Md(i));
+//    }
+//    SparseMatrix *S = Mult(B, *MinvBt);
 
-   Solver *invM, *invS;
-   invM = new DSmoother(M);
-#ifndef MFEM_USE_SUITESPARSE
-   invS = new GSSmoother(*S);
-#else
-   invS = new UMFPackSolver(*S);
-#endif
+//    Solver *invM, *invS;
+//    invM = new DSmoother(M);
+// #ifndef MFEM_USE_SUITESPARSE
+//    invS = new GSSmoother(*S);
+// #else
+//    invS = new UMFPackSolver(*S);
+// #endif
 
-   invM->iterative_mode = false;
-   invS->iterative_mode = false;
+//    invM->iterative_mode = false;
+//    invS->iterative_mode = false;
 
-   BlockDiagonalPreconditioner darcyPrec(block_offsets);
-   darcyPrec.SetDiagonalBlock(0, invM);
-   darcyPrec.SetDiagonalBlock(1, invS);
+//    BlockDiagonalPreconditioner darcyPrec(block_offsets);
+//    darcyPrec.SetDiagonalBlock(0, invM);
+//    darcyPrec.SetDiagonalBlock(1, invS);
 
-   // 10. Solve the linear system with MINRES.
-   //     Check the norm of the unpreconditioned residual.
-   int maxIter(10);
-   double rtol(1.e-6);
-   double atol(1.e-10);
+//    // 10. Solve the linear system with MINRES.
+//    //     Check the norm of the unpreconditioned residual.
+//    int maxIter(10);
+//    double rtol(1.e-6);
+//    double atol(1.e-10);
 
-   chrono.Clear();
-   chrono.Start();
-   MINRESSolver solver;
-   solver.SetAbsTol(atol);
-   solver.SetRelTol(rtol);
-   solver.SetMaxIter(maxIter);
-   solver.SetOperator(darcyMatrix);
-   solver.SetPreconditioner(darcyPrec);
-   solver.SetPrintLevel(1);
-   x = 0.0;
-   solver.Mult(rhs, x);
-   chrono.Stop();
+//    chrono.Clear();
+//    chrono.Start();
+//    MINRESSolver solver;
+//    solver.SetAbsTol(atol);
+//    solver.SetRelTol(rtol);
+//    solver.SetMaxIter(maxIter);
+//    solver.SetOperator(darcyMatrix);
+//    solver.SetPreconditioner(darcyPrec);
+//    solver.SetPrintLevel(1);
+//    x = 0.0;
+//    solver.Mult(rhs, x);
+//    chrono.Stop();
 
-   if (solver.GetConverged())
-      std::cout << "MINRES converged in " << solver.GetNumIterations()
-                << " iterations with a residual norm of " << solver.GetFinalNorm() << ".\n";
-   else
-      std::cout << "MINRES did not converge in " << solver.GetNumIterations()
-                << " iterations. Residual norm is " << solver.GetFinalNorm() << ".\n";
-   std::cout << "MINRES solver took " << chrono.RealTime() << "s. \n";
+   // if (solver.GetConverged())
+   //    std::cout << "MINRES converged in " << solver.GetNumIterations()
+   //              << " iterations with a residual norm of " << solver.GetFinalNorm() << ".\n";
+   // else
+   //    std::cout << "MINRES did not converge in " << solver.GetNumIterations()
+   //              << " iterations. Residual norm is " << solver.GetFinalNorm() << ".\n";
+   // std::cout << "MINRES solver took " << chrono.RealTime() << "s. \n";
 
    // 11. Create the grid functions u and p. Compute the L2 error norms.
    GridFunction u, p;
@@ -388,10 +449,10 @@ int main(int argc, char *argv[])
    // 15. Free the used memory.
    delete fform;
    delete gform;
-   delete invM;
-   delete invS;
-   delete S;
-   delete MinvBt;
+   // delete invM;
+   // delete invS;
+   // delete S;
+   // delete MinvBt;
    delete BT;
    delete mVarf;
    delete bVarf;

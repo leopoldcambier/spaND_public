@@ -131,18 +131,22 @@ void geqp3(Eigen::MatrixXd* A, Eigen::VectorXi* jpvt, Eigen::VectorXd* tau);
 void gesvd(Eigen::MatrixXd* A, Eigen::MatrixXd* U, Eigen::VectorXd* S, Eigen::MatrixXd* VT);
 
 /**
+ * A = U S U^T 
+ * A <- U
+ * Full Symmetric EVD
+ */
+void syev(Eigen::MatrixXd* A, Eigen::VectorXd* S);
+
+/**
  * x <- Q * x
- * A <- Q * A
  */
 void ormqr_notrans(Eigen::MatrixXd* v, Eigen::VectorXd* h, Segment* x);
-void ormqr_notrans_left(Eigen::MatrixXd* v, Eigen::VectorXd* h, Eigen::MatrixXd* A);
 
 /**
  * x <- Q^T * x
  * A <- Q^T * A
  */
 void ormqr_trans(Eigen::MatrixXd* v, Eigen::VectorXd* h, Segment* x);
-void ormqr_trans_left(Eigen::MatrixXd* v, Eigen::VectorXd* h, Eigen::MatrixXd* A);
 
 /**
  * A <- A   * Q
@@ -210,5 +214,85 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
     os << std::endl;
     return os;
 }
+
+/**
+ * Statistics and Logging
+ **/
+
+struct Profile {
+    public:
+        double elim;
+        double scale;
+        double spars;
+        double merge;
+
+        double mergealloc;
+        double mergecopy;
+
+        double geqp3;
+        double geqrf;
+        double potf;
+        double trsm;
+        double gemm;
+
+        double buildq;
+        double scattq;
+        double perma;
+        double scatta;
+        double prese;
+        double assmb;
+        double phi;
+
+        Profile() :
+            elim(0), scale(0), spars(0), merge(0), 
+            mergealloc(0), mergecopy(0),
+            geqp3(0), geqrf(0), potf(0), trsm(0), gemm(0),
+            buildq(0), scattq(0), perma(0), scatta(0), prese(0), assmb(0), phi(0)
+            {}
+};
+
+template<typename T>
+struct Stats {
+    private:
+        T min;
+        T max;
+        T sum;
+        int count;
+    public:
+        Stats(): min(std::numeric_limits<T>::max()), max(std::numeric_limits<T>::lowest()), sum(0), count(0) {};
+        void addData(T value) {
+            this->min = (this->min < value ? this->min : value);
+            this->max = (this->max > value ? this->max : value);
+            this->sum += value;
+            this->count += 1;
+        }
+        T      getMin()   const { return this->count == 0 ? 0 : this->min; }
+        T      getMax()   const { return this->count == 0 ? 0 : this->max; }
+        double getMean()  const { return ((double)this->sum)/((double)this->count); }
+        int    getCount() const { return this->count; }
+        T      getSum()   const { return this->sum; }
+};
+
+struct Log {
+    public:
+        int dofs_nd;
+        int dofs_left_nd;
+        int dofs_left_elim;
+        int dofs_left_spars;
+        long long int fact_nnz;
+        Stats<int> rank_before;
+        Stats<int> rank_after;
+        Stats<int> nbrs;
+        Stats<double> cond_diag;
+        Stats<double> norm_diag;        
+    
+        Log() :
+            dofs_nd(0),
+            dofs_left_nd(0), dofs_left_elim(0), dofs_left_spars(0),
+            fact_nnz(0),
+            rank_before(Stats<int>()), rank_after(Stats<int>()), nbrs(Stats<int>()),
+            cond_diag(Stats<double>()), norm_diag(Stats<double>())
+            {}
+};
 
 #endif

@@ -20,7 +20,8 @@ int main(int argc, char* argv[]) {
         // General
         ("m,matrix", "Matrix MM coordinate file (mandatory)", cxxopts::value<string>())
         ("l,lvl", "# of levels (mandatory)", cxxopts::value<int>())
-        ("symmetric", "Wether the matrix is symmetric or not", cxxopts::value<bool>()->default_value("true"))
+        ("symm_kind", "Wether the matrix is SPD, symmetric SYM or general GEN", cxxopts::value<string>()->default_value("SPD"))
+        ("part_kind", "Partition kind (modified ND - MND) or recursive bissection based (RB)", cxxopts::value<string>()->default_value("MND"))
         // Geometry
         ("coordinates", "Coordinates MM array file. If provided, will do a geometric partitioning.", cxxopts::value<string>())
         ("n,coordinates_n", "If provided with -n, will use a tensor n^d & geometric partitioning. Overwrites --coordinates", cxxopts::value<int>()->default_value("-1"))
@@ -31,9 +32,9 @@ int main(int argc, char* argv[]) {
         ("scale", "Wether to scale or not", cxxopts::value<bool>()->default_value("true"))
         ("ortho", "Wether to use orthogonal basis or not", cxxopts::value<bool>()->default_value("true"))
         ("preserve", "Wether to preserve the 1 vector or not (default: false)", cxxopts::value<bool>()->default_value("false"))
-        ("scaling_kind", "The scaling kind, PLU or SVD (unsymmetric only)", cxxopts::value<string>()->default_value("PLU"))
+        ("scaling_kind", "The scaling kind, LLT, PLU, EVD or SVD", cxxopts::value<string>()->default_value("LLT"))
         ("use_want_sparsify", "Wether to use want_sparsify (true) or not (default: true)", cxxopts::value<bool>()->default_value("true"))
-        // Iterative method        
+        // Iterative method
         ("solver","Wether to use GMRES or CG", cxxopts::value<string>()->default_value("GMRES"))
         ("i,iterations","Iterative solver iterations", cxxopts::value<int>()->default_value("100"))
         // Problem transformation, to try some functions of A
@@ -43,7 +44,10 @@ int main(int argc, char* argv[]) {
         ("output_ordering", "Output ordering in text file Nx(6*nlevels) matrix", cxxopts::value<string>())
         ("monitor_cond", "Monitor condition number of pivots", cxxopts::value<bool>()->default_value("false"))
         // Detail
-        ("n_threads", "Number of threads", cxxopts::value<int>()->default_value("1"))        
+        ("n_threads", "Number of threads", cxxopts::value<int>()->default_value("1"))
+        // For indefinite saddle point systems
+        ("sp_mid", "Saddle point middle point", cxxopts::value<int>()->default_value("-1"))
+        ("sp_eps", "Saddle point epsilon point", cxxopts::value<double>()->default_value("0.0"))       
         ;
     auto result = options.parse(argc, argv);
 
@@ -76,9 +80,17 @@ int main(int argc, char* argv[]) {
     bool scale = result["scale"].as<bool>();
     bool ortho = result["ortho"].as<bool>();
     bool preserve = result["preserve"].as<bool>();
-    bool symmetric = result["symmetric"].as<bool>();
+    string s0 = result["symm_kind"].as<string>();
+    SymmKind symmk = (s0 == "SPD" ? SymmKind::SPD :
+                     (s0 == "SYM" ? SymmKind::SYM :
+                     (SymmKind::GEN)));
     bool verb = result["verbose"].as<bool>();
-    ScalingKind sk = (result["scaling_kind"].as<string>() == "PLU" ? ScalingKind::PLU : ScalingKind::SVD);
+    string s1 = result["scaling_kind"].as<string>();
+    ScalingKind sk = (s1 == "LLT" ? ScalingKind::LLT :
+                     (s1 == "PLU" ? ScalingKind::PLU :
+                     (s1 == "SVD" ? ScalingKind::SVD :
+                     (ScalingKind::EVD))));
+    PartKind pk = (result["part_kind"].as<string>() == "MND" ? PartKind::MND : PartKind::RB);
     bool useCG = (result["solver"].as<string>() == "CG");
     bool useGMRES = (result["solver"].as<string>() == "GMRES");
     int iterations = result["iterations"].as<int>();
@@ -106,6 +118,8 @@ int main(int argc, char* argv[]) {
     SpMat A = mmio::sp_mmread<double,int>(matrix);
     int N = A.rows();
     cout << "Matrix " << N << "x" << N << " loaded from " << matrix << endl;
+
+    // Modifiy A for some cases/experiments
     if(flip_sign) {
         A = -A;
         cout << "Solving with -A instead" << endl;
@@ -125,7 +139,26 @@ int main(int argc, char* argv[]) {
         }
         A = RatA;
     }
-    cout << A.block(0, 0, 10, 10) << endl;
+
+    // Saddle point modifications
+    SpMat Aprec = A;
+    bool is_saddlepoint = result.count("sp_mid") && result.count("sp_eps");
+    if(is_saddlepoint) {
+        int sp_mid = result["sp_mid"].as<int>();
+        double sp_eps = result["sp_eps"].as<double>();
+        cout << "A[~sp_mid,~sp_mid]:\n" << A.block(sp_mid-2, sp_mid-2, 5, 5) << endl;
+        cout << "System is saddle point" << endl;
+        cout << "Rebuilding matrix by adding " << sp_eps << " on diagonal at entries [" << sp_mid << ";" << N << "[" << endl;
+        vector<Triplet<double>> tripletList;
+        for(int i = sp_mid; i < N; i++) { tripletList.push_back({i,i,sp_eps}); }
+        for(int k = 0; k < A.outerSize(); ++k) {
+            for (SpMat::InnerIterator it(A,k); it; ++it) { tripletList.push_back({it.row(),it.col(),it.value()}); }
+        }
+        Aprec = SpMat(N,N);
+        Aprec.setFromTriplets(tripletList.begin(), tripletList.end());
+    }
+    cout << "A:\n" << A.block(0, 0, 10, 10) << endl;
+    cout << "Aprec:\n" << Aprec.block(0, 0, 10, 10) << endl;
 
     // Load coordinates ?
     MatrixXd X;
@@ -147,11 +180,10 @@ int main(int argc, char* argv[]) {
     // Vector to preserve (maybe)
     MatrixXd phi = MatrixXd::Ones(N,1);
 
-    // Initialize a tree
-    Tree t(nlevels);
     // Basic options
+    Tree t(nlevels);    
     t.set_verb(verb);
-    t.set_symmetry(symmetric);
+    t.set_symm_kind(symmk);
     t.set_tol(tol);
     t.set_skip(skip);
     t.set_scale(scale);
@@ -162,6 +194,7 @@ int main(int argc, char* argv[]) {
         t.set_Xcoo(&X);
     }
     t.set_scaling_kind(sk);
+    t.set_part_kind(pk);
     t.set_use_sparsify(use_want_sparsify);
     t.set_phi(&phi);
     t.set_monitor_condition_pivots(monitor_cond);
@@ -169,7 +202,7 @@ int main(int argc, char* argv[]) {
 
     // Partition
     timer tpart_0 = wctime();
-    SpMat AAT = symmetric_graph(A);
+    SpMat AAT = symmetric_graph(Aprec);
     t.partition(AAT);
     timer tpart = wctime();
 
@@ -196,7 +229,7 @@ int main(int argc, char* argv[]) {
 
     // Assembly
     timer tass_0 = wctime();
-    t.assemble(A);
+    t.assemble(Aprec);
     timer tass = wctime();
 
     // Factorize    
@@ -216,7 +249,6 @@ int main(int argc, char* argv[]) {
         matrix_hash<VectorXd> hash;
         // Random b
         {
-            
             VectorXd b = random(N, 2019);
             VectorXd x = b;
             timer tsolv_0 = wctime();

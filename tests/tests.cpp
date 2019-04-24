@@ -7,12 +7,96 @@
 #include "mmio.hpp"
 #include "cxxopts.hpp"
 
-
 using namespace std;
 using namespace Eigen;
 
 bool VERB = false;
 int  N_THREADS = 4;
+int  RUN_MANY = 4;
+
+SymmKind symm2syk(int symm) {
+    switch(symm) {
+        case 0: return SymmKind::SPD;
+        case 1: return SymmKind::SYM;
+        case 2: return SymmKind::GEN;
+        default: assert(false);
+    };
+    return SymmKind::SPD;
+}
+
+PartKind pki2pk(int pki) {
+    switch(pki) {
+        case 0: return PartKind::MND;
+        case 1: return PartKind::RB;
+        default: assert(false);
+    };
+    return PartKind::MND;
+}
+
+ScalingKind ski2sk(int ski) {
+    switch(ski) {
+        case 0: return ScalingKind::LLT;
+        case 1: return ScalingKind::EVD;
+        case 2: return ScalingKind::SVD;
+        case 3: return ScalingKind::PLU;
+        default: assert(false);
+    };
+    return ScalingKind::LLT;
+}
+
+bool is_valid(SymmKind syk, ScalingKind sk, bool scale, bool ortho, bool preserve) {
+    if(syk == SymmKind::SPD) {
+        if (sk != ScalingKind::LLT) return false;
+        if (ortho && !scale)        return false;
+        if (preserve && (!ortho || !scale)) return false;
+    }
+    if(syk == SymmKind::SYM) {
+        if (sk != ScalingKind::EVD) return false;
+        if (!ortho || !scale || preserve)
+                                    return false;
+    }
+    if(syk == SymmKind::GEN) {
+        if (sk != ScalingKind::SVD && sk != ScalingKind::PLU) 
+                                    return false;
+        if (!ortho || !scale || preserve)
+                                    return false;
+    }
+    return true;
+}
+
+struct params {
+    SymmKind syk;
+    PartKind pk;
+    ScalingKind sk;
+    bool scale;
+    bool ortho;
+    bool preserve;
+};
+
+vector<params> get_params() {
+    vector<params> configs;
+    for(int symm = 0; symm < 3; symm++) {
+        for(int pki = 0; pki < 2; pki++) {
+            for(int so = 0; so < 3; so++) {
+                for(int ski = 0; ski < 4; ski++) {
+                    for(int pres = 0; pres < 2; pres++) {
+                        bool scale = true;
+                        bool ortho = false;
+                        if (so == 0) { scale = false; ortho = false; }
+                        if (so == 1) { scale = true ; ortho = false; }
+                        if (so == 2) { scale = true ; ortho = true ; }
+                        PartKind pk = pki2pk(pki);
+                        ScalingKind sk = ski2sk(ski); 
+                        SymmKind syk = symm2syk(symm);
+                        if(! is_valid(syk, sk, scale, ortho, pres)) continue;
+                        configs.push_back({syk, pk, sk, scale, ortho, pres == 1});
+                    }
+                }
+            }
+        }
+    }
+    return configs;
+};
 
 SpMat neglapl(int n, int d) {
     stringstream s;
@@ -26,7 +110,7 @@ SpMat neglapl_unsym(int n, int d, int seed) {
     SpMat A = neglapl(n, d);
     default_random_engine gen;
     gen.seed(seed);
-    uniform_real_distribution<double> rand(-1, 1);
+    uniform_real_distribution<double> rand(-0.1, 0.1);
     for(int k = 0; k < A.outerSize(); ++k) {
         for(SpMat::InnerIterator it(A, k); it; ++it) {
             A.coeffRef(it.row(), it.col()) += rand(gen);
@@ -339,51 +423,54 @@ TEST(PartitionTest, Consistency) {
         string file = ss.str();
         for(int nlevels = 1; nlevels < 8; nlevels++) {
             for(int geoi = 0; geoi < 2; geoi++) {
-                bool geo = (geoi == 0);
-                // Partition tree
-                MatrixXd X = linspace_nd(s, d);
-                Tree t(nlevels);
-                t.set_verb(VERB);
-                SpMat A = mmio::sp_mmread<double,int>(file);
-                t.set_use_geo(geo);
-                t.set_Xcoo(&X);
-                t.partition(A);
-                // (1) Lengths
-                ASSERT_EQ(t.part.size(), n);
-                // (2) Check ordering integrity
-                for(int i = 0; i < n; i++) {
-                    auto pi = t.part[i].self;
-                    for (SpMat::InnerIterator it(A,i); it; ++it) {
-                        int j = it.row();
-                        auto pj = t.part[j].self;  
-                        ASSERT_FALSE(should_be_disconnected(pi.lvl, pj.lvl, pi.sep, pj.sep));
-                    }
-                }
-                // (3) Check left/right integrity          
-                for(int i = 0; i < n; i++) {
-                    auto pi = t.part[i].self;
-                    auto li = t.part[i].l;
-                    auto ri = t.part[i].r;
-                    if(pi.lvl == 0) {
-                        ASSERT_TRUE(pi == li);
-                        ASSERT_TRUE(pi == ri);
-                    } else {
-                        ASSERT_TRUE(pi.lvl > li.lvl);
-                        ASSERT_TRUE(pi.lvl > ri.lvl);
-                        while(li.lvl < pi.lvl - 1) {
-                            li.lvl += 1;
-                            li.sep /= 2;
+                for(int pki = 0; pki < 2; pki++) {
+                    bool geo = (geoi == 0);
+                    PartKind pk = pki == 0 ? PartKind::MND : PartKind::RB;
+                    // Partition tree
+                    MatrixXd X = linspace_nd(s, d);
+                    Tree t(nlevels);
+                    t.set_verb(VERB);
+                    SpMat A = mmio::sp_mmread<double,int>(file);
+                    t.set_use_geo(geo);
+                    t.set_Xcoo(&X);
+                    t.set_part_kind(pk);
+                    t.partition(A);                    
+                    // (1) Lengths
+                    ASSERT_EQ(t.part.size(), n);
+                    // (2) Check ordering integrity
+                    for(int i = 0; i < n; i++) {
+                        auto pi = t.part[i].self;
+                        for (SpMat::InnerIterator it(A,i); it; ++it) {
+                            int j = it.row();
+                            auto pj = t.part[j].self;  
+                            ASSERT_FALSE(should_be_disconnected(pi.lvl, pj.lvl, pi.sep, pj.sep));
                         }
-                        while(ri.lvl < pi.lvl - 1) {
-                            ri.lvl += 1;
-                            ri.sep /= 2;
-                        }
-                        ASSERT_TRUE(li.lvl == pi.lvl - 1);
-                        ASSERT_TRUE(ri.lvl == pi.lvl - 1);
-                        ASSERT_TRUE(li.sep == 2 * pi.sep);
-                        ASSERT_TRUE(ri.sep == 2 * pi.sep + 1);
                     }
-                    
+                    // (3) Check left/right integrity          
+                    for(int i = 0; i < n; i++) {
+                        auto pi = t.part[i].self;
+                        auto li = t.part[i].l;
+                        auto ri = t.part[i].r;
+                        if(pi.lvl == 0) {
+                            ASSERT_TRUE(pi == li);
+                            ASSERT_TRUE(pi == ri);
+                        } else {
+                            ASSERT_TRUE(pi.lvl > li.lvl);
+                            ASSERT_TRUE(pi.lvl > ri.lvl);
+                            while(li.lvl < pi.lvl - 1) {
+                                li.lvl += 1;
+                                li.sep /= 2;
+                            }
+                            while(ri.lvl < pi.lvl - 1) {
+                                ri.lvl += 1;
+                                ri.sep /= 2;
+                            }
+                            ASSERT_TRUE(li.lvl == pi.lvl - 1);
+                            ASSERT_TRUE(ri.lvl == pi.lvl - 1);
+                            ASSERT_TRUE(li.sep == 2 * pi.sep);
+                            ASSERT_TRUE(ri.sep == 2 * pi.sep + 1);
+                        }
+                    }
                 }
             }
         }
@@ -398,54 +485,59 @@ TEST(PartitionTest, Consistency) {
 TEST(Assembly, Consistency) {
     vector<int> dims  = {2, 2,  2,  3, 3,  3};
     vector<int> sizes = {5, 10, 20, 5, 10, 15};
-    for(int test = 0; test < dims.size(); test++) {        
-        int s = sizes[test];
-        int d = dims[test];
-        SpMat Aref = neglapl(s, d);
-        SpMat Arefunsym = neglapl_unsym(s, d, test);
-        for(int nlevels = 2; nlevels < 5 ; nlevels++) {
-            /**
-             * Symmetric case
-             */
-            {
-                // Partition and assemble
-                Tree t(nlevels);
-                t.set_verb(VERB);
-                t.set_use_geo(false);
-                t.partition(Aref);
-                t.assemble(Aref);
-                // Couple things to check
-                ASSERT_FALSE(t.is_factorized());
-                // Get permutation
-                VectorXi p = t.get_assembly_perm();
-                // Check it's indeed a permutation
-                ASSERT_TRUE(isperm(&p));
-                auto P = p.asPermutation();
-                // Check get_mat()
-                SpMat A2 = t.get_assembly_mat();
-                EXPECT_EQ((P.inverse() * Aref * P - A2).norm(), 0.0);
-            }
-            /**
-             * Unsymmetric case
-             */
-            {
-                // Partition and assemble
-                Tree t(nlevels);
-                t.set_verb(VERB);
-                t.set_symmetry(false);
-                t.set_use_geo(false);
-                t.partition(Arefunsym);
-                t.assemble(Arefunsym);                
-                // Couple things to check
-                ASSERT_FALSE(t.is_factorized());
-                // Get permutation
-                VectorXi p = t.get_assembly_perm();
-                // Check it's indeed a permutation
-                ASSERT_TRUE(isperm(&p));
-                auto P = p.asPermutation();
-                // Check get_mat()
-                SpMat A2 = t.get_assembly_mat();
-                EXPECT_EQ((P.inverse() * Arefunsym * P - A2).norm(), 0.0);
+    for(int test = 0; test < dims.size(); test++) { 
+        for(int pki = 0; pki < 2; pki++) {
+            PartKind pk = pki == 0 ? PartKind::MND : PartKind::RB;       
+            int s = sizes[test];
+            int d = dims[test];
+            SpMat Aref = neglapl(s, d);
+            SpMat Arefunsym = neglapl_unsym(s, d, test);
+            for(int nlevels = 2; nlevels < 5 ; nlevels++) {
+                /**
+                 * Symmetric case
+                 */
+                {
+                    // Partition and assemble
+                    Tree t(nlevels);
+                    t.set_verb(VERB);
+                    t.set_use_geo(false);
+                    t.set_part_kind(pk);
+                    t.partition(Aref);                    
+                    t.assemble(Aref);
+                    // Couple things to check
+                    ASSERT_FALSE(t.is_factorized());
+                    // Get permutation
+                    VectorXi p = t.get_assembly_perm();
+                    // Check it's indeed a permutation
+                    ASSERT_TRUE(isperm(&p));
+                    auto P = p.asPermutation();
+                    // Check get_mat()
+                    SpMat A2 = t.get_trailing_mat();
+                    EXPECT_EQ((P.inverse() * Aref * P - A2).norm(), 0.0);
+                }
+                /**
+                 * Unsymmetric case
+                 */
+                {
+                    // Partition and assemble
+                    Tree t(nlevels);
+                    t.set_verb(VERB);
+                    t.set_symm_kind(SymmKind::GEN);
+                    t.set_use_geo(false);
+                    t.set_part_kind(pk);
+                    t.partition(Arefunsym);
+                    t.assemble(Arefunsym);                
+                    // Couple things to check
+                    ASSERT_FALSE(t.is_factorized());
+                    // Get permutation
+                    VectorXi p = t.get_assembly_perm();
+                    // Check it's indeed a permutation
+                    ASSERT_TRUE(isperm(&p));
+                    auto P = p.asPermutation();
+                    // Check get_mat()
+                    SpMat A2 = t.get_trailing_mat();
+                    EXPECT_EQ((P.inverse() * Arefunsym * P - A2).norm(), 0.0);
+                }
             }
         }
     }
@@ -459,8 +551,12 @@ TEST(Assembly, Consistency) {
 TEST(ApproxTest, Exact) {
     vector<int> dims  = {2, 2,  2,  3, 3};
     vector<int> sizes = {5, 10, 20, 5, 15};
+    vector<double> tols = {1e-14, 1e-14, 0.0};
+    vector<int> skips   = {0,     4,     1000};
+    vector<params> configs = get_params();
     for(int test = 0; test < dims.size(); test++) {
-        cout << "Test " << test << "..." << endl;
+        cout << "Test " << test << "... ";
+        int count = 0;
         int s = sizes[test];
         int d = dims[test];
         int n = pow(s, d);
@@ -468,103 +564,36 @@ TEST(ApproxTest, Exact) {
         SpMat Aref = neglapl(s, d);
         SpMat Arefunsym = neglapl_unsym(s, d, test);
         for(int nlevels = nlevelsmin; nlevels < nlevelsmin+5 ; nlevels++) {
-            for(int so = 0; so < 3; so++) {
-                bool scale = true;
-                bool ortho = false;
-                if (so == 0) { scale = false; ortho = false; }
-                if (so == 1) { scale = true ; ortho = false; }
-                if (so == 2) { scale = true ; ortho = true ; }
-                { // just skip everything
-                    { // Symmetric                        
-                        Tree t(nlevels);
-                        t.set_verb(VERB);
-                        t.partition(Aref);
-                        t.assemble(Aref);
-                        t.set_tol(0.0);
-                        t.set_skip(1000);
-                        t.set_scale(scale);
-                        t.set_ortho(ortho);
-                        t.factorize();
-                        VectorXd b = random(n, test+nlevels+so+2019+0);
-                        auto x = b;
-                        t.solve(x);
-                        double err = (Aref*x-b).norm() / b.norm();
-                        EXPECT_LE(err, 1e-14);
-                    }
-                    { // Unsymmetric
-                        Tree t(nlevels);
-                        t.set_verb(VERB);
-                        t.set_symmetry(false);
-                        t.partition(Arefunsym);
-                        t.assemble(Arefunsym);
-                        t.set_tol(0.0);
-                        t.set_skip(1000);
-                        t.set_scale(scale);
-                        t.set_ortho(ortho);
-                        t.factorize();
-                        VectorXd b = random(n, test+nlevels+so+2019+1);
-                        auto x = b;
-                        t.solve(x);
-                        double err = (Arefunsym*x-b).norm() / b.norm();
-                        EXPECT_LE(err, 1e-12) << err;
-                    }                    
-                }
-                { // Really small tolerance
-                    { // Symmetric
-                        Tree t(nlevels);
-                        t.set_verb(VERB);
-                        t.partition(Aref);
-                        t.assemble(Aref);
-                        t.set_tol(1e-14);
-                        t.set_skip(0);
-                        t.set_scale(scale);
-                        t.set_ortho(ortho);
-                        t.factorize();
-                        VectorXd b = random(n, test+nlevels+so+2019+2);
-                        auto x = b;
-                        t.solve(x);
-                        double err = (Aref*x-b).norm() / b.norm();
-                        EXPECT_LE(err, 1e-12) << scale << ortho << nlevels;
-                    }
-                    { // Unsymmetric
-                        Tree t(nlevels);
-                        t.set_verb(VERB);
-                        t.set_symmetry(false);
-                        t.partition(Arefunsym);
-                        t.assemble(Arefunsym);
-                        t.set_tol(1e-14);
-                        t.set_skip(0);
-                        t.set_scale(scale);
-                        t.set_ortho(ortho);
-                        t.factorize();
-                        VectorXd b = random(n, test+nlevels+so+2019+3);
-                        auto x = b;
-                        t.solve(x);
-                        double err = (Arefunsym*x-b).norm() / b.norm();
-                        EXPECT_LE(err, 1e-10);
-                    }
-                }
-                if (scale && ortho) { // Preserve on top of that
+            for(auto c: configs) {
+                SpMat A = (c.syk == SymmKind::SPD ? Aref : (c.syk == SymmKind::SYM ? (-Aref) : Arefunsym));
+                MatrixXd phi = random(Aref.rows(), 3, test+nlevels+2019);
+                for(int it = 0; it < tols.size(); it++) {
+                    double tol = tols[it];
+                    double skip = skips[it];
                     Tree t(nlevels);
-                    t.set_verb(VERB);                    
-                    t.partition(Aref);
-                    t.assemble(Aref);
-                    t.set_tol(1e-14);
-                    t.set_skip(0);
-                    t.set_scale(scale);
-                    t.set_ortho(ortho);
-                    MatrixXd phi = random(Aref.rows(), 3, test+nlevels+so+2019);
-                    t.set_preserve(true);
+                    t.set_verb(VERB);
+                    t.set_part_kind(c.pk);
+                    t.set_scaling_kind(c.sk);
+                    t.set_symm_kind(c.syk);                                
+                    t.partition(A);
+                    t.assemble(A);
+                    t.set_tol(tol);
+                    t.set_skip(skip);
+                    t.set_scale(c.scale);
+                    t.set_ortho(c.ortho);
+                    t.set_preserve(c.preserve);
                     t.set_phi(&phi);
                     t.factorize();
-                    VectorXd b = random(n, test+nlevels+so+2019+4);
+                    VectorXd b = random(n, test+nlevels+2019+1);
                     auto x = b;
                     t.solve(x);
-                    double err = (Aref*x-b).norm() / b.norm();
-                    EXPECT_TRUE(err < 1e-12);
+                    double err = (A*x-b).norm() / b.norm();
+                    EXPECT_LE(err, 1e-10) << err;
+                    count++;
                 }
             }
         }
+        cout << count << " tested.\n";
     }
 }
 
@@ -667,12 +696,14 @@ TEST(ApproxTest, Preservation) {
  * with and without preservation
  */
 TEST(ApproxTest, Approx) {
-    vector<int> dims  = {2, 2,  2,  3, 3};
-    vector<int> sizes = {5, 10, 20, 5, 15};
+    vector<int> dims  = {2, 2,  2,  2,   3, 3};
+    vector<int> sizes = {5, 10, 20, 128, 5, 15};
     vector<double> tols = {0.0, 1e-10, 1e-6, 1e-2, 10};
     matrix_hash<VectorXd> hash;
+    vector<params> configs = get_params();
     for(int test = 0; test < dims.size(); test++) {
         vector<size_t> allhashes;
+        int count = 0;
         cout << "Test " << test << "... ";
         int s = sizes[test];
         int d = dims[test];
@@ -683,52 +714,45 @@ TEST(ApproxTest, Approx) {
         for(int nlevels = nlevelsmin; nlevels < nlevelsmin + 5; nlevels++) {
             for(int it = 0; it < tols.size(); it++) {
                 for(int skip = 0; skip < 3; skip++) {
-                    for(int so = 0; so < 3; so++) {
-                        for(int symm = 0; symm < 2; symm++) {
-                            for(int pr = 0; pr < 2; pr++) {
-                                bool scale = true;
-                                bool ortho = false;
-                                if (so == 0) { scale = false; ortho = false; }
-                                if (so == 1) { scale = true ; ortho = false; }
-                                if (so == 2) { scale = true ; ortho = true ; }
-                                Tree t(nlevels);
-                                t.set_verb(VERB);
-                                t.set_symmetry(symm);
-                                SpMat A = (symm ? Aref : Arefunsym);
-                                if( pr && (! (symm && scale && ortho) ) ) continue;
-                                t.partition(A);
-                                t.assemble(A);
-                                ASSERT_FALSE(t.is_factorized());
-                                MatrixXd phi = random(A.rows(), 2, nlevels+it+skip+so+symm+pr+2019);
-                                t.set_tol(tols[it]);
-                                t.set_skip(skip);
-                                t.set_scale(scale);
-                                t.set_ortho(ortho);
-                                t.set_preserve(pr);
-                                t.set_phi(&phi);
-                                t.factorize();
-                                ASSERT_TRUE(t.is_factorized());
-                                VectorXd b = random(n, nlevels+it+skip+so+symm+pr+2019);
-                                auto x = b;
-                                t.solve(x);
-                                double err = (A*x-b).norm() / b.norm();
-                                auto hb = hash(b);
-                                auto hx = hash(x);
-                                allhashes.push_back(hb);
-                                allhashes.push_back(hx);
-                                if (tols[it] == 0.0) {
-                                    EXPECT_LE(err, 1e-12);
-                                } else {
-                                    EXPECT_LE(err, tols[it] * 1e2) << hb << " " << hx << " " << test << " " << it << " " << nlevels << " " << skip << " " << so << " " << symm << " " << pr << " " << tols[it];
-                                }
-                            }
+                    for(auto c: configs) {
+                        SpMat A = (c.syk == SymmKind::SPD ? Aref : (c.syk == SymmKind::SYM ? (-Aref) : Arefunsym));
+                        Tree t(nlevels);
+                        t.set_verb(VERB);
+                        t.set_symm_kind(c.syk);
+                        t.set_part_kind(c.pk);
+                        t.set_scaling_kind(c.sk);                                                                    
+                        t.partition(A);
+                        t.assemble(A);
+                        ASSERT_FALSE(t.is_factorized());
+                        MatrixXd phi = random(A.rows(), 2, nlevels+it+skip+2019);
+                        t.set_tol(tols[it]);
+                        t.set_skip(skip);
+                        t.set_scale(c.scale);
+                        t.set_ortho(c.ortho);
+                        t.set_preserve(c.preserve);
+                        t.set_phi(&phi);
+                        t.factorize();
+                        ASSERT_TRUE(t.is_factorized());
+                        VectorXd b = random(n, nlevels+it+skip+2019);
+                        auto x = b;
+                        t.solve(x);
+                        double err = (A*x-b).norm() / b.norm();
+                        auto hb = hash(b);
+                        auto hx = hash(x);
+                        allhashes.push_back(hb);
+                        allhashes.push_back(hx);
+                        if (tols[it] == 0.0) {
+                            EXPECT_LE(err, 1e-12);
+                        } else {
+                            EXPECT_LE(err, tols[it] * 1e2);
                         }
+                        count++;
                     }
                 }
             }
         }
         size_t h = hashv(allhashes);
-        cout << "Overall hash(x,b) = " << h << endl;
+        cout << count << " tested. Overall hash(x,b) = " << h << endl;
     }
 }
 
@@ -738,64 +762,135 @@ TEST(ApproxTest, Approx) {
 TEST(ApproxTest, Repro) {
     int    dims[3]      = {2, 2, 2};
     int    sizes[3]     = {20, 64, 16};
-    double tols[6]      = {1e-5, 1e-5, 10, 10, 1e-8, 0.5};
-    double skips[6]     = {1, 1, 1, 0, 2, 1};
-    bool   scales[6]    = {true, true, true, true, true, false};
-    bool   orthos[6]    = {true, true, true, true, false, false};
-    bool   preserves[6] = {false, true, false, true, false, false};
-    int repeat = 100;
+    double tols[4]      = {1e-5, 10, 1e-8, 0.1};
+    double skips[4]     = {1, 2, 0, 1};
+    int    repeat       = 10;
+    vector<params> configs = get_params();
     matrix_hash<VectorXd> hash;
     for(int test = 0; test < 3; test++) {
-        cout << "Test " << test << "..." << endl;
+        cout << "Test " << test << "... ";
+        int count = 0;
         int s = sizes[test];
         int d = dims[test];
         int n = pow(s, d);
         SpMat Aref = neglapl(s, d);
         SpMat Arefunsym = neglapl_unsym(s, d, test);        
         for(int nlevels = 5; nlevels < 7; nlevels++) {
-            for(int symm = 0; symm < 2; symm++) {
-                for(int pr = 0; pr < 6; pr++) {
+            for(int pr = 0; pr < 6; pr++) {
+                for(auto c: configs) {
+                    SpMat A = (c.syk == SymmKind::SPD ? Aref : (c.syk == SymmKind::SYM ? (-Aref) : Arefunsym));
+                    MatrixXd phi = random(A.rows(), 3, test+nlevels+pr+2019);
                     Tree t(nlevels);
-                    t.set_verb(VERB);
-                    t.set_symmetry(symm);
-                    SpMat A = (symm ? Aref : Arefunsym);
-                    MatrixXd phi = random(A.rows(), 3, test+nlevels+symm+pr+2019);
+                    t.set_verb(VERB);                        
+                    t.set_symm_kind(c.syk);
+                    t.set_part_kind(c.pk);
+                    t.set_scaling_kind(c.sk);
                     t.partition(A);
                     t.assemble(A);
                     t.set_tol(tols[pr]);
                     t.set_skip(skips[pr]);
-                    t.set_scale(scales[pr]);
-                    t.set_ortho(orthos[pr]);
-                    t.set_preserve(preserves[pr]);
+                    t.set_scale(c.scale);
+                    t.set_ortho(c.ortho);
+                    t.set_preserve(c.preserve);
                     t.set_phi(&phi);
-                    if(preserves[pr] && (! symm)) continue;
                     t.factorize();
                     VectorXd b = random(n, nlevels+test);
                     auto xref = b;
                     t.solve(xref);
+                    count++;
                     for(int i = 0; i < repeat; i++) {
                         Tree t2(nlevels);
-                        t2.set_verb(VERB);
-                        t2.set_symmetry(symm);
+                        t2.set_verb(VERB);                        
+                        t2.set_symm_kind(c.syk);
+                        t2.set_part_kind(c.pk);
+                        t2.set_scaling_kind(c.sk);
                         t2.partition(A);
                         t2.assemble(A);
                         t2.set_tol(tols[pr]);
                         t2.set_skip(skips[pr]);
-                        t2.set_scale(scales[pr]);
-                        t2.set_ortho(orthos[pr]);
-                        t2.set_preserve(preserves[pr]);
+                        t2.set_scale(c.scale);
+                        t2.set_ortho(c.ortho);
+                        t2.set_preserve(c.preserve);
                         t2.set_phi(&phi);
                         t2.factorize();
                         auto x = b;
                         t2.solve(x);
-                        auto hb = hash(b);
-                        auto hx = hash(x);
-                        EXPECT_EQ((xref - x).norm(), 0.0) << hb << " " << hx << " " << test << " " << nlevels << " " << symm << " " << pr << " " << tols[pr] << " " << skips[pr] << " " << scales[pr] << " " << orthos[pr] << " " << preserves[pr];
+                        EXPECT_EQ((xref - x).norm(), 0.0);
                     }
                 }
             }
         }
+        cout << count << " tested.\n";
     }
+}
+
+TEST(Run, Many) {
+    vector<int>    dims  = {2,  2,  2,   3, 3,  3 };
+    vector<int>    sizes = {5,  16, 64,  5, 10, 15};
+    vector<double> tols  = {0.0, 1e-2, 1.0, 10.0};
+    int ntests = dims.size();
+    matrix_hash<VectorXd> hash;
+    vector<size_t> allhashes;
+    vector<params> configs = get_params();
+    for(int test = 0; test < RUN_MANY; test++) {
+        cout << "Run " << test << "... \n";
+        int count = 0;
+        int n = sizes[test];
+        int d = dims[test];
+        SpMat Aref = neglapl(n, d);
+        SpMat Arefunsym = neglapl_unsym(n, d, test);        
+        int N = Aref.rows();
+        int nlevelsmin = N < 1000 ? 1 : 8;
+        for(int nlevels = nlevelsmin; nlevels < nlevelsmin+3; nlevels++) {
+            for(double tol : tols) {
+                for(int skip = 0; skip < 3; skip++) {
+                    for(int geo = 0; geo < 2; geo++) {
+                        for(auto c: configs) {
+                            SpMat A = (c.syk == SymmKind::SPD ? Aref : (c.syk == SymmKind::SYM ? (-Aref) : Arefunsym));
+                            MatrixXd phi = random(A.rows(), 3, test+nlevels+2019);
+                            MatrixXd X = linspace_nd(n, d);
+                            Tree t(nlevels);
+                            t.set_verb(VERB);                        
+                            t.set_symm_kind(c.syk);
+                            t.set_part_kind(c.pk);
+                            t.set_scaling_kind(c.sk);
+                            t.set_use_geo(geo);
+                            t.set_Xcoo(&X);
+                            t.set_tol(tol);
+                            t.set_skip(skip);
+                            t.set_scale(c.scale);
+                            t.set_ortho(c.ortho);
+                            t.set_preserve(c.preserve);
+                            t.set_phi(&phi);
+
+                            t.partition(A);
+                            t.assemble(A);
+                            t.factorize();
+                            VectorXd b = random(N, nlevels+test);
+                            auto x = b;
+                            t.solve(x);                            
+                            double res = (A*x-b).norm() / b.norm();
+                            auto h = hash(x);
+                            allhashes.push_back(h);
+                            printf("%6d %4d %d] %3d %3.2e %d %d %d %d %d %d %d %d | %3.2e | %lu\n", 
+                                     N, n, d,   nlevels, 
+                                                     tol, skip, 
+                                                              geo,
+                                                                c.preserve, 
+                                                                   c.syk, c.pk, c.sk, c.scale, c.ortho,
+                                                                   res, h);
+                            count++;
+                        }
+                    }
+                }
+            }
+        }
+        cout << "Ran " << count << " tests\n";
+        size_t h = hashv(allhashes);
+        cout << "Overall hash so far: " << h << endl;
+    }
+    size_t h = hashv(allhashes);
+    cout << "Overall hash: " << h << endl;
 }
 
 int main(int argc, char **argv) {
@@ -806,6 +901,7 @@ int main(int argc, char **argv) {
         ("help", "Print help")
         ("v,verb", "Verbose (default: false)", cxxopts::value<bool>()->default_value("false"))
         ("n_threads", "Number of threads", cxxopts::value<int>()->default_value("4"))
+        ("run", "How many Run.Many to run", cxxopts::value<int>()->default_value("4"))
         ;
     auto result = options.parse(argc, argv);
 
@@ -817,8 +913,10 @@ int main(int argc, char **argv) {
 
     VERB = result["verb"].as<bool>();
     N_THREADS = result["n_threads"].as<int>();
+    RUN_MANY = result["run"].as<int>();
     cout << "n_threads: " << N_THREADS << endl;
     cout << "verb: " << VERB << endl;
+    cout << "run: " << RUN_MANY << endl;
 
     return RUN_ALL_TESTS();
 }

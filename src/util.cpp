@@ -279,45 +279,6 @@ void ormqr_trans(MatrixXd* v, VectorXd* h, Segment* x) {
     assert(info == 0);
 }
 
-// A <- Q^T * A
-void ormqr_trans_left(MatrixXd* v, VectorXd* h, MatrixXd* A) {
-    int m = A->rows();
-    int n = A->cols();
-    int k = v->cols();
-    assert(h->size() == k);
-    assert(v->rows() == m);
-    if (m == 0 || n == 0)
-        return;
-    int info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', m, n, k, v->data(), m, h->data(), A->data(), m);
-    assert(info == 0);
-}
-
-// A <- Q * A
-void ormqr_notrans_left(MatrixXd* v, VectorXd* h, MatrixXd* A) {
-    int m = A->rows();
-    int n = A->cols();
-    int k = v->cols();
-    assert(h->size() == k);
-    assert(v->rows() == m);
-    if (m == 0 || n == 0)
-        return;
-    int info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'N', m, n, k, v->data(), m, h->data(), A->data(), m);
-    assert(info == 0);
-}
-
-// A <- A * Q
-void ormqr_notrans_right(MatrixXd* v, VectorXd* h, MatrixXd* A) {
-    int m = A->rows();
-    int n = A->cols();
-    int k = v->cols();
-    assert(h->size() == k);
-    assert(v->rows() == n);
-    if (m == 0 || n == 0)
-        return;
-    int info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'R', 'N', m, n, k, v->data(), n, h->data(), A->data(), m);
-    assert(info == 0);
-}
-
 // A <- (Q^/T) * A * (Q^/T)
 void ormqr(MatrixXd* v, VectorXd* h, MatrixXd* A, char side, char trans) {
     int m = A->rows();
@@ -371,6 +332,18 @@ void gesvd(Eigen::MatrixXd* A, Eigen::MatrixXd* U, Eigen::VectorXd* S, Eigen::Ma
         return;
     VectorXd superb(k-1);
     int info = LAPACKE_dgesvd(LAPACK_COL_MAJOR, 'A', 'A', m, n, A->data(), m, S->data(), U->data(), m, VT->data(), n, superb.data());
+    assert(info == 0);
+}
+
+// Full Symmetric EVD
+void syev(Eigen::MatrixXd* A, Eigen::VectorXd* S) {
+    int m = A->rows();
+    int n = A->cols();
+    assert(m == n);
+    assert(S->size() == m);
+    if(m == 0)
+        return;
+    int info = LAPACKE_dsyev(LAPACK_COL_MAJOR, 'V', 'L', m, A->data(), m, S->data());
     assert(info == 0);
 }
 

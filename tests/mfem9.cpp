@@ -43,6 +43,7 @@
 #include "util.h"
 #include "is.h"
 #include "mfem_util.h"
+#include "mmio.hpp"
 
 using namespace std;
 using namespace mfem;
@@ -89,7 +90,7 @@ private:
    Tree* t;
 
 public:
-   FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const Vector &_b, double, Eigen::MatrixXd&);
+   FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const Vector &_b, double, Eigen::MatrixXd&, double, int);
 
    virtual void Mult(const Vector &x, Vector &y) const; // Computes y = f(x, t), i.e., y = M^{-1} (K u + b)
    virtual void ImplicitSolve(const double dt, const Vector &x, Vector &k); // Solves k = f(x + dt*k, t + dt), i.e., solves for k: k = M^{-1} (K (x + dt*k) + b)
@@ -112,6 +113,8 @@ int main(int argc, char *argv[])
    bool visit = false;
    bool binary = false;
    int vis_steps = 5;
+   double tol = 1e-2;
+   int skip = 4;
 
    int precision = 8;
    cout.precision(precision);
@@ -143,6 +146,10 @@ int main(int argc, char *argv[])
                   "Use binary (Sidre) or ascii format for VisIt data files.");
    args.AddOption(&vis_steps, "-vs", "--visualization-steps",
                   "Visualize every n-th timestep.");
+   args.AddOption(&tol, "-tol", "--tol",
+                  "spaND tolerance.");
+   args.AddOption(&skip, "-skip", "--skip",
+                  "skip bottom.");
    args.Parse();
    if (!args.Good())
    {
@@ -234,9 +241,6 @@ int main(int argc, char *argv[])
    cout << "Xcoo" << endl;
    cout << Xcoo.rows() << " x " << Xcoo.cols() << endl;
    cout << Xcoo.leftCols(10) << endl;
-   // std::ofstream file("Xcoo.txt");
-   // file << Xcoo;
-   // file.close();
 
    // 7. Define the initial conditions, save the corresponding grid function to
    //    a file and (optionally) save data in the VisIt format and initialize
@@ -305,7 +309,7 @@ int main(int argc, char *argv[])
    //    right-hand side, and perform time-integration (looping over the time
    //    iterations, ti, with a time-step dt).
    SpMat K = mfem2eigen(k.SpMat());
-   FE_Evolution adv(m.SpMat(), k.SpMat(), b, dt, Xcoo);
+   FE_Evolution adv(m.SpMat(), k.SpMat(), b, dt, Xcoo, tol, skip);
 
    // VectorXd part = adv.t->get_partition();
    // std::ofstream file2("part.txt");
@@ -361,7 +365,7 @@ int main(int argc, char *argv[])
 
 
 // Implementation of class FE_Evolution
-FE_Evolution::FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const Vector &_b, double dt, Eigen::MatrixXd &Xcoo)
+FE_Evolution::FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const Vector &_b, double dt, Eigen::MatrixXd &Xcoo, double tol, int skip)
    : TimeDependentOperator(_M.Size()), M(_M), K(_K), b(_b), z(_M.Size())
 {
    M_solver.SetPreconditioner(M_prec);
@@ -388,22 +392,32 @@ FE_Evolution::FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const
    SpMat AAT = symmetric_graph(A);
    int N = A.rows();
    cout << "Vertices? " << N << endl;
+   cout << "NNZ? " << A.nonZeros() << endl;
    int lvl = (int)ceil(log( double(N) / 64.0)/log(2.0));
    cout << "Lvl " << lvl << endl;
    
+#if 0
+   std::ofstream Coofs("mfem9_coords.txt", std::ofstream::out);
+   Coofs << Xcoo;
+   Coofs.close();
+   mmio::sp_mmwrite("mfem9_A.txt", A);
+#endif
+
    t = new Tree(lvl);
-   t->set_symmetry(false);
-   t->set_tol(0.5);
-   t->set_skip(4);
+   t->set_symm_kind(SymmKind::GEN);
+   t->set_tol(tol);
+   t->set_skip(skip);
    t->set_Xcoo(&Xcoo);
    t->set_use_geo(true);
    t->set_use_sparsify(false);
+   t->set_scaling_kind(ScalingKind::SVD);
    t->partition(AAT);
    t->assemble(A);
    int err = t->factorize();
    if(err != 0) {
       exit(err);
    }
+   t->print_log();
 }
 
 void FE_Evolution::ImplicitSolve(const double dt, const Vector &x, Vector &k)

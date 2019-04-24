@@ -6,7 +6,7 @@ OBJDIR = ../obj
 
 INCLUDE = -I$(INCDIR) -I$(EIGENDIR) -I$(BLASDIR) -I$(METISDIR) -I$(MMIODIR)
 
-CFLAGS = -std=c++11 -Wall
+CFLAGS = -std=c++14 -Wall
 ifdef DEBUG
     CFLAGS += -g -O0 -D_GLIBCXX_DEBUG
 else
@@ -16,17 +16,17 @@ ifeq ($(USE_MKL),1)
     CFLAGS += -DUSE_MKL
 endif
 
-LDFLAGS = -lmetis -L$(METISLIB) -L$(BLASLIB) 
+LDFLAGS = -lmetis -L$(METISLIB) -L$(BLASLIB)
 ifeq ($(USE_MKL),1)
     LDFLAGS += -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl 
 else
     LDFLAGS += -lblas -llapack
 endif
 
-DEPS = $(INCDIR)/tree.h $(INCDIR)/util.h $(INCDIR)/is.h #$(INCDIR)/mm_wrap.h $(INCDIR)/mm_io.h
-OBJ = $(OBJDIR)/tree.o $(OBJDIR)/util.o $(OBJDIR)/is.o  #$(OBJDIR)/mm_wrap.o $(OBJDIR)/mm_io.o
+DEPS = $(INCDIR)/tree.h $(INCDIR)/util.h $(INCDIR)/is.h $(INCDIR)/partition.h
+OBJ  = $(OBJDIR)/tree.o $(OBJDIR)/util.o $(OBJDIR)/is.o $(OBJDIR)/partition.o
 
-all: run icesheet mfem mfem2 mfem5 mfem9 tests spaND stokes
+all: icesheet mfem mfem2 mfem5 mfem9 tests spaND
 
 # Tests
 $(OBJDIR)/%.o: %.cpp $(DEPS)
@@ -58,17 +58,11 @@ spaND: spaND.cpp $(OBJ)
 icesheet: icesheet.cpp $(OBJ)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(INCLUDE)
 
-stokes: stokes.cpp $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(INCLUDE)
-
-run: run.cpp $(OBJ)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDFLAGS) $(INCLUDE)
-
 libgtest.a: 
 	cd $(GTEST); $(CC) -isystem ./include -I. -pthread -c ./src/gtest-all.cc; ar -rv ../../tests/libgtest.a gtest-all.o
 
 .PHONY: clean
 
 clean:
-	rm -f $(OBJDIR)/*.o run icesheet spemfem mfem2 mfem9 tests spaND stokes
+	rm -f $(OBJDIR)/*.o icesheet spemfem mfem2 mfem9 tests spaND
 
