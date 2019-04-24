@@ -1,6 +1,8 @@
 # spaND
 Repository for the spaND algorithm (https://arxiv.org/abs/1901.02971).
 
+![Partition pic](https://raw.githubusercontent.com/leopoldcambier/spaND_public/stable/partition_64x64.png "Partitioning output")
+
 ## Disclaimer
 This is very researchy-hacky code. 
 The goal is to easily experiments various kinds of sparsification techniques, with reasonnable performances.
