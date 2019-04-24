@@ -85,103 +85,149 @@ Let's compile the general driver code and run it on a sample arbitrary matrix. S
     This should output something similar to this
 
 ```
-Gandalf:tests lcambier$ ./spaND -m ../mats/neglapl_2_32.mm --coordinates ../mats/32x32.mm -t 1e-2 -l 5
+Gandalf:tests lcambier$ ./spaND -m ../mats/neglapl_2_32.mm -t 1e-2 -l 5
 Matrix 1024x1024 loaded from ../mats/neglapl_2_32.mm
-Coordinate file 2x1024 loaded from ../mats/32x32.mm
+A:
+4 -1 0 0 0 0 0 0 0 0
+-1 4 -1 0 0 0 0 0 0 0
+0 -1 4 -1 0 0 0 0 0 0
+0 0 -1 4 -1 0 0 0 0 0
+0 0 0 -1 4 -1 0 0 0 0
+0 0 0 0 -1 4 -1 0 0 0
+0 0 0 0 0 -1 4 -1 0 0
+0 0 0 0 0 0 -1 4 -1 0
+0 0 0 0 0 0 0 -1 4 -1
+0 0 0 0 0 0 0 0 -1 4
+
+Aprec:
+4 -1 0 0 0 0 0 0 0 0
+-1 4 -1 0 0 0 0 0 0 0
+0 -1 4 -1 0 0 0 0 0 0
+0 0 -1 4 -1 0 0 0 0 0
+0 0 0 -1 4 -1 0 0 0 0
+0 0 0 0 -1 4 -1 0 0 0
+0 0 0 0 0 -1 4 -1 0 0
+0 0 0 0 0 0 -1 4 -1 0
+0 0 0 0 0 0 0 -1 4 -1
+0 0 0 0 0 0 0 0 -1 4
+
 Tree with 5 levels (0 eliminated so far)
-Geometric partitioning of matrix with 1024 dofs with 5 levels in 2D
-  Depth  1: 9.99e-05 s. (    1 separators, [   32    32], mean   32.0)
-  Depth  2: 4.70e-05 s. (    2 separators, [   15    16], mean   15.5)
-  Depth  3: 9.89e-05 s. (    4 separators, [   15    16], mean   15.2)
-  Depth  4: 9.18e-05 s. (    8 separators, [    7     8], mean    7.4)
-Partitioning time : 1.66e-03 s. (1.64e-04 s. ND)
+MND algebraic (with vertex sep ? 1) partitioning of matrix with 1024 dofs with 5 levels
+Algebraic MND partitioning & ordering
+  Depth  1: 7.14e-04 s. (    1 separators, [   32    32], mean   32.0)
+  Depth  2: 6.31e-04 s. (    2 separators, [   13    13], mean   13.0)
+  Depth  3: 7.75e-04 s. (    4 separators, [   10    16], mean   12.2)
+  Depth  4: 1.18e-03 s. (    8 separators, [    5    10], mean    7.8)
+Clustering size statistics (# of leaf-clusters at each level of the ND hierarchy)
+Lvl     Count       Min       Max      Mean
+  0        16        30        73        53
+  1         8         5        10         8
+  2        11         1         9         4
+  3         7         1         7         4
+  4         9         1         7         4
+Hierarchy numbers (# of cluster at each level of the cluster-hierarchy)
+  0        51
+  1        14
+  2         5
+  3         1
+  4         0
+Partitioning time : 3.66e-03 s.
 Assembling (Size 1024 with 5 levels and symmetry 1)
-Clustering size statistics
+Edge size statistics (Leaf-cluster edge size at each level of the ND hierarchy)
 Lvl     Count       Min       Max      Mean
-  0        16        49        64        53
-  1         8         7         8         7
-  2        12         1         8         5
-  3         6         1         8         5
-  4         7         1         8         5
-Edge size statistics
+  0        87        30      5329       756
+  1        31         7       100        41
+  2        18         1        81        23
+  3        11         1        49        19
+  4        12         1        49        16
+Edge count statistics (Leaf-cluster edge count at each level of the ND hierarchy)
 Lvl     Count       Min       Max      Mean
-  0        64       343      4096       979
-  1        20         7        64        26
-  2        24         1        64        21
-  3        12         1        64        21
-  4        13         1        64        20
-Edge count statistics
-Lvl     Count       Min       Max      Mean
-  0        16         3         5         4
-  1         8         2         3         2
-  2        12         1         3         2
-  3         6         1         3         2
-  4         7         1         3         2
-Assembly time : 2.33e-03 s. (7.30e-04 permuting A)
+  0        16         3         8         5
+  1         8         3         5         4
+  2        11         1         3         2
+  3         7         1         3         2
+  4         9         1         3         1
+Assembly time : 9.11e-04 s. (1.67e-04 permuting A)
 Factorization started
   N:          1024
   #levels:    5
   verbose?:   1
-  symmetry?:  1
   adaptive?:  1
   tol?:       0.01
   #skip:      0
   scale?:     1
   ortho?:     1
+  symmetrykd? SPD
   scalingkd?  LLT
+  want_spars? 1
+  mon cond?   0
   preserving? 0
-Level 0, 1024 dofs left, 49 clusters left
-  Elim: 3.18e-03 s., 183 dofs left, 33 clusters left
-  Scaling: 4.31e-04 s.
-  Sparsification: 6.31e-04 s., 129 dofs left, geqp3 2.22e-04, geqrf 0.00e+00, assmb 1.88e-05, buildQ 1.96e-05, scatterQ 0.00e+00, permA 2.81e-04, scatterA 4.24e-05
-Level 1, 129 dofs left, 33 clusters left
-  Elim: 1.14e-04 s., 89 dofs left, 25 clusters left
-  Merge: 1.49e-04 s., 89 dofs left, 15 clusters left
-  Scaling: 1.79e-04 s.
-  Sparsification: 1.11e-04 s., 58 dofs left, geqp3 7.22e-05, geqrf 0.00e+00, assmb 5.25e-06, buildQ 2.86e-06, scatterQ 0.00e+00, permA 8.34e-06, scatterA 8.82e-06
-Level 2, 58 dofs left, 15 clusters left
-  Elim: 4.20e-05 s., 37 dofs left, 11 clusters left
-  Merge: 4.41e-05 s., 37 dofs left, 5 clusters left
-  Scaling: 1.39e-04 s.
-  Sparsification: 5.20e-05 s., 17 dofs left, geqp3 2.65e-05, geqrf 0.00e+00, assmb 3.10e-06, buildQ 3.81e-06, scatterQ 0.00e+00, permA 3.81e-06, scatterA 8.82e-06
-Level 3, 17 dofs left, 5 clusters left
-  Elim: 1.19e-05 s., 9 dofs left, 3 clusters left
-  Merge: 1.00e-05 s., 9 dofs left, 1 clusters left
-  Scaling: 3.10e-06 s.
-  Sparsification: 2.15e-06 s., 0 dofs left, geqp3 1.19e-06, geqrf 0.00e+00, assmb 0.00e+00, buildQ 0.00e+00, scatterQ 0.00e+00, permA 0.00e+00, scatterA 0.00e+00
+Level 0, 1024 dofs left, 51 clusters left
+  Elim: 3.63e-03 s., 169 dofs left, 35 clusters left
+  Scaling: 3.16e-04 s.
+  Sparsification: 3.57e-04 s., 147 dofs left, geqp3 2.25e-04, geqrf 0.00e+00, assmb 2.93e-05, buildQ 6.91e-06, scatterQ 0.00e+00, permA 1.93e-05, scatterA 2.55e-05
+Level 1, 147 dofs left, 35 clusters left
+  Elim: 1.54e-04 s., 99 dofs left, 27 clusters left
+  Merge: 9.20e-05 s., 99 dofs left, 14 clusters left
+  Scaling: 3.29e-04 s.
+  Sparsification: 1.91e-04 s., 66 dofs left, geqp3 1.09e-04, geqrf 0.00e+00, assmb 1.07e-05, buildQ 3.10e-06, scatterQ 0.00e+00, permA 3.50e-05, scatterA 1.12e-05
+Level 2, 66 dofs left, 14 clusters left
+  Elim: 3.81e-05 s., 39 dofs left, 10 clusters left
+  Merge: 2.38e-05 s., 39 dofs left, 5 clusters left
+  Scaling: 1.55e-04 s.
+  Sparsification: 4.70e-05 s., 23 dofs left, geqp3 2.65e-05, geqrf 0.00e+00, assmb 2.15e-06, buildQ 9.54e-07, scatterQ 0.00e+00, permA 5.72e-06, scatterA 3.34e-06
+Level 3, 23 dofs left, 5 clusters left
+  Elim: 7.87e-06 s., 15 dofs left, 3 clusters left
+  Merge: 1.91e-06 s., 15 dofs left, 1 clusters left
+  Scaling: 4.05e-06 s.
+  Sparsification: 2.15e-06 s., 0 dofs left, geqp3 0.00e+00, geqrf 0.00e+00, assmb 0.00e+00, buildQ 0.00e+00, scatterQ 0.00e+00, permA 9.54e-07, scatterA 0.00e+00
 Level 4, 0 dofs left, 1 clusters left
   Elim: 1.19e-06 s., 0 dofs left, 0 clusters left
-  Merge: 3.10e-06 s., 0 dofs left, 0 clusters left
+  Merge: 0.00e+00 s., 0 dofs left, 0 clusters left
   Scaling: 0.00e+00 s.
   Sparsification: 0.00e+00 s., 0 dofs left, geqp3 0.00e+00, geqrf 0.00e+00, assmb 0.00e+00, buildQ 0.00e+00, scatterQ 0.00e+00, permA 0.00e+00, scatterA 0.00e+00
-Factorization: 5.29e-03 s.
-&&&& Lvl         Elim        Scale     Sparsify        Merge     Preserve        geqp3        geqrf         potf         trsm         gemm       buildq       scattq        assmb       scatta          phi   mergealloc    mergecopy
-&&&&   0 3.175020e-03 4.310608e-04 6.308556e-04 0.000000e+00 0.000000e+00 2.222061e-04 0.000000e+00 2.013206e-03 1.103163e-03 2.038479e-04 1.955032e-05 0.000000e+00 1.883507e-05 4.243851e-05 0.000000e+00 0.000000e+00 0.000000e+00
-&&&&   1 1.139641e-04 1.790524e-04 1.111031e-04 1.490116e-04 0.000000e+00 7.224083e-05 0.000000e+00 1.144409e-05 1.499653e-04 4.410744e-05 2.861023e-06 0.000000e+00 5.245209e-06 8.821487e-06 0.000000e+00 1.955032e-05 1.406670e-05
-&&&&   2 4.196167e-05 1.389980e-04 5.197525e-05 4.410744e-05 0.000000e+00 2.646446e-05 0.000000e+00 8.583069e-06 1.225471e-04 2.479553e-05 3.814697e-06 0.000000e+00 3.099442e-06 8.821487e-06 0.000000e+00 3.337860e-06 8.821487e-06
-&&&&   3 1.192093e-05 3.099442e-06 2.145767e-06 1.001358e-05 0.000000e+00 1.192093e-06 0.000000e+00 2.145767e-06 0.000000e+00 7.152557e-06 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00
-&&&&   4 1.192093e-06 0.000000e+00 0.000000e+00 3.099442e-06 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00
-++++ Lvl        ND    ND lft    El lft    Sp lft   Fct nnz    Rk Bfr    Rk Aft
-++++   0       841      1024       183       129     43846         7         5
-++++   1        59       183        89        58     46846         8         5
-++++   2        61       124        37        17     48789         9         4
-++++   3        31        63         9         0     50011         9         0
-++++   4        32        32         0         0     51035       nan       nan
-Timings:
-  Partition: 0.00209999 s.
-  Assembly: 0.00233698 s.
-  Factorization: 0.00577521 s.
-1: |Ax-b|/|b| = 8.48e-04 <? 1.00e-12
-2: |Ax-b|/|b| = 1.92e-05 <? 1.00e-12
-3: |Ax-b|/|b| = 2.45e-08 <? 1.00e-12
-4: |Ax-b|/|b| = 8.72e-11 <? 1.00e-12
-5: |Ax-b|/|b| = 2.34e-13 <? 1.00e-12
+Factorization: 5.57e-03 s.
+&&&& Lvl |         Elim        Scale     Sparsify        Merge |     Preserve        geqp3        geqrf         potf         trsm         gemm       buildq       scattq        assmb       scatta          phi   mergealloc    mergecopy
+&&&&   0 | 3.628969e-03 3.159046e-04 3.569126e-04 0.000000e+00 | 0.000000e+00 2.245903e-04 0.000000e+00 2.183199e-03 9.703636e-04 2.005100e-04 6.914139e-06 0.000000e+00 2.932549e-05 2.551079e-05 0.000000e+00 0.000000e+00 0.000000e+00
+&&&&   1 | 1.540184e-04 3.290176e-04 1.909733e-04 9.202957e-05 | 0.000000e+00 1.087189e-04 0.000000e+00 1.573563e-05 2.760887e-04 7.605553e-05 3.099442e-06 0.000000e+00 1.072884e-05 1.120567e-05 0.000000e+00 2.098083e-05 2.312660e-05
+&&&&   2 | 3.814697e-05 1.549721e-04 4.696846e-05 2.384186e-05 | 0.000000e+00 2.646446e-05 0.000000e+00 8.106232e-06 1.380444e-04 2.217293e-05 9.536743e-07 0.000000e+00 2.145767e-06 3.337860e-06 0.000000e+00 6.914139e-06 7.152557e-06
+&&&&   3 | 7.867813e-06 4.053116e-06 2.145767e-06 1.907349e-06 | 0.000000e+00 0.000000e+00 0.000000e+00 3.099442e-06 0.000000e+00 5.006790e-06 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 9.536743e-07
+&&&&   4 | 1.192093e-06 0.000000e+00 0.000000e+00 0.000000e+00 | 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00 0.000000e+00
+++++ Lvl        ND    ND lft    El lft    Sp lft   Fct nnz    Rk Bfr    Rk Aft      Nbrs   Tot Bfr   Tot Aft   Cl Sped  CondDiag   NormDiag
+++++   0       855       169       169       147   4.5e+04         5         4        31       166       144        32   0.0e+00    5.5e+00
+++++   1        62       107        99        66   4.7e+04         8         5        31        98        65        13   0.0e+00    1.2e+00
+++++   2        49        58        39        23   4.8e+04         8         5        19        39        23         5   0.0e+00    1.3e+00
+++++   3        26        32        15         0   4.9e+04        15         0         0        15         0         1   0.0e+00    1.4e+00
+++++   4        32         0         0         0   4.9e+04       nan       nan       nan         0         0         0   0.0e+00     nan
+Timings [s.]:
+<<<<tpart=0.00398993
+<<<<tassm=0.000919104
+<<<<tfact=0.0055759
+<<<<stop=15
+<<<<error=0
+<<<<tsolv=0.000378132
+One-time solve (Random b):
+<<<<|Ax-b|/|b| : 0.00748426
+<<<<hash(b) : 3038325205160007287
+<<<<hash(x) : 6626362926110812358
+One-time solve (Random x):
+<<<<|Ax-b|/|b| : 0.000493604
+<<<<|x-xtrue|/|x| : 0.00525977
+<<<<hash(xtrue) : 3038325205160007287
+<<<<hash(b) : 710722609911636072
+<<<<hash(x) : 10696639138482290093
+1: |Ax-b|/|b| = 1.77e-03 <? 1.00e-12
+2: |Ax-b|/|b| = 4.95e-05 <? 1.00e-12
+3: |Ax-b|/|b| = 1.01e-07 <? 1.00e-12
+4: |Ax-b|/|b| = 1.72e-09 <? 1.00e-12
+5: |Ax-b|/|b| = 3.00e-12 <? 1.00e-12
+6: |Ax-b|/|b| = 2.33e-14 <? 1.00e-12
 GMRES converged!
-# of iter:  5
-Total time: 2.10e-03 s.
-  Matvec:   3.96e-05 s.
-  Precond:  1.15e-03 s.
-GMRES: #iterations: 5, residual |Ax-b|/|b|: 5.2265e-13
-  GMRES: 0.00211883 s.
-<<<<GMRES=5
+# of iter:  6
+Total time: 2.90e-03 s.
+  Matvec:   1.24e-04 s.
+  Precond:  2.03e-03 s.
+GMRES: #iterations: 6, residual |Ax-b|/|b|: 3.62705e-14
+  GMRES: 0.00291705 s.
+<<<<GMRES=6
 ```
