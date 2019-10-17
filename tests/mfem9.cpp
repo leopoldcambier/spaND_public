@@ -39,15 +39,14 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include "tree.h"
-#include "util.h"
-#include "is.h"
+#include "spaND.h"
 #include "mfem_util.h"
 #include "mmio.hpp"
 
 using namespace std;
 using namespace mfem;
 using namespace Eigen;
+using namespace spaND;
 
 // Choice for the problem setup. The fluid velocity, initial condition and
 // inflow boundary condition are chosen based on this parameter.
@@ -376,6 +375,12 @@ FE_Evolution::FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const
    M_solver.SetAbsTol(0.0);
    M_solver.SetMaxIter(100);
    M_solver.SetPrintLevel(0);
+   
+   auto Meigen = mfem2eigen(_M); 
+   auto Keigen = mfem2eigen(_K); 
+   cout << "**** M norm     : " << Meigen.norm() << endl;
+   cout << "**** K norm     : " << Keigen.norm() << endl;
+   cout << "**** dt * K norm: " << dt * Keigen.norm() << endl;
 
    T = *Add(1.0, _M, -dt, _K);
    T_solver.SetPreconditioner(T_prec);
@@ -393,7 +398,7 @@ FE_Evolution::FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const
    int N = A.rows();
    cout << "Vertices? " << N << endl;
    cout << "NNZ? " << A.nonZeros() << endl;
-   int lvl = (int)ceil(log( double(N) / 64.0)/log(2.0));
+   int lvl = (int)ceil(log( double(N) / 64.0)/log(2.0)) - 1;
    cout << "Lvl " << lvl << endl;
    
 #if 0
@@ -410,14 +415,21 @@ FE_Evolution::FE_Evolution(mfem::SparseMatrix &_M, mfem::SparseMatrix &_K, const
    t->set_Xcoo(&Xcoo);
    t->set_use_geo(true);
    t->set_use_sparsify(false);
-   t->set_scaling_kind(ScalingKind::SVD);
+   t->set_scaling_kind(ScalingKind::PLU);
    t->partition(AAT);
    t->assemble(A);
-   int err = t->factorize();
-   if(err != 0) {
-      exit(err);
+   try {
+      t->factorize();
+   } catch (std::exception& ex) {
+      cout << ex.what();
    }
    t->print_log();
+   // Try a random solve
+   VectorXd b = VectorXd::Random(A.rows());
+   VectorXd x = b;
+   cout << "Random RHS GMRES\n";
+   int iter = gmres(A, b, x, *t, 100, 100, 1e-9, true);
+   cout << "GMRES: #iterations: " << iter << ", residual |Ax-b|/|b|: " << (A*x-b).norm() / b.norm() << endl;
 }
 
 void FE_Evolution::ImplicitSolve(const double dt, const Vector &x, Vector &k)

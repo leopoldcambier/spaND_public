@@ -2,12 +2,41 @@
 // Originally published under the MPLv2 License https://www.mozilla.org/en-US/MPL/2.0/
 // See http://eigen.tuxfamily.org/index.php?title=Main_Page#License
 
-#include "is.h"
+#include "spaND.h"
 
 using namespace Eigen;
+using namespace spaND;
 
-template<typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-int cg(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, int iters, double tol, bool verb)
+namespace spaND {
+
+int ir(const SpMat& mat, const VectorXd& rhs, VectorXd& x, const Tree& precond, int iters, double tol, bool verb)
+{
+    typedef Eigen::Matrix<double,Eigen::Dynamic,1> VectorType;
+    VectorType residual = rhs - mat * x;
+    double rhsNorm2 = rhs.squaredNorm();
+    if(rhsNorm2 == 0){
+        x.setZero();
+        return 0;
+    }
+    double threshold = tol*tol*rhsNorm2;
+    double residualNorm2 = residual.squaredNorm();
+    int i = 1;
+    while(residualNorm2 >= threshold && i < iters) {
+        precond.solve(residual);
+        x += residual;
+        residual = rhs - mat * x;
+        residualNorm2 = residual.squaredNorm();
+        if(verb) printf("%d: |Ax-b|/|b| = %3.2e <? %3.2e\n", i, sqrt(residualNorm2 / rhsNorm2), tol);
+        if(residualNorm2 < threshold) {
+            if(verb) printf("Converged!\n");
+            break;
+        }
+        i++;
+    }
+    return i;
+}
+
+int cg(const SpMat& mat, const VectorXd& rhs, VectorXd& x, const Tree& precond, int iters, double tol, bool verb)
 {
     using std::sqrt;
     using std::abs;
@@ -91,8 +120,7 @@ int cg(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& pre
     return iters;
 };
 
-template<typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-int gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, int iters, int restart, double tol_error, bool verb) {
+int gmres(const SpMat& mat, const VectorXd& rhs, VectorXd& x, const Tree& precond, int iters, int restart, double tol_error, bool verb) {
 
     timer start     = wctime();
     double t_matvec = 0.0;
@@ -101,8 +129,8 @@ int gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& 
     using std::sqrt;
     using std::abs;
 
-    typedef typename Dest::RealScalar RealScalar;
-    typedef typename Dest::Scalar Scalar;
+    typedef typename VectorXd::RealScalar RealScalar;
+    typedef typename VectorXd::Scalar Scalar;
     typedef Matrix < Scalar, Dynamic, 1 > VectorType;
     typedef Matrix < Scalar, Dynamic, Dynamic, ColMajor> FMatrixType;
 
@@ -271,5 +299,4 @@ int gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& 
     return iters;
 }
 
-template int cg(const SpMat& mat, const Eigen::VectorXd& rhs, Eigen::VectorXd& x, const Tree& precond, int iters, double tol, bool verb);
-template int gmres(const SpMat& mat, const Eigen::VectorXd& rhs, Eigen::VectorXd& x, const Tree& precond, int iters, int restart, double tol_error, bool verb);
+}

@@ -1,8 +1,23 @@
-#include "partition.h"
+#include "spaND.h"
 
 using namespace std;
 using namespace Eigen;
 
+namespace spaND {
+
+SepID merge(SepID& s) {
+    return SepID(s.lvl + 1, s.sep / 2);
+}
+
+ClusterID merge_if(ClusterID& c, int lvl) {
+    auto left  = c.l.lvl < lvl ? merge(c.l) : c.l;
+    auto right = c.r.lvl < lvl ? merge(c.r) : c.r;
+    return ClusterID(c.self, left, right);
+}
+
+/** Returns the CSC undirected-graph structure of the symmetric sparse matrix A. Edges (u,v) and (v,u) are both present for u != v
+ *  There are no self loops
+ */
 tuple<vector<int>,vector<int>> SpMat2CSC(SpMat& A) {
     int size = A.rows();
     assert(A.cols() == A.rows());
@@ -23,14 +38,14 @@ tuple<vector<int>,vector<int>> SpMat2CSC(SpMat& A) {
     return make_tuple(colptr, rowval);
 }
 
-SepID merge(SepID& s) {
-    return SepID(s.lvl + 1, s.sep / 2);
+std::ostream& operator<<(std::ostream& os, const SepID& s) {
+    os << "(" << s.lvl << " " << s.sep << ")";
+    return os;
 }
 
-ClusterID merge_if(ClusterID& c, int lvl) {
-    auto left  = c.l.lvl < lvl ? merge(c.l) : c.l;
-    auto right = c.r.lvl < lvl ? merge(c.r) : c.r;
-    return ClusterID(c.self, left, right);
+std::ostream& operator<<(std::ostream& os, const ClusterID& c) {
+    os << "(" << c.self << ":" << c.l << ";" << c.r << ")";
+    return os;
 }
 
 void partition_metis(vector<int> &colptr, vector<int> &rowval, vector<int> &colptrtmp, vector<int> &rowvaltmp, vector<int> &dofs, vector<int> &parts, bool useVertexSep) {
@@ -227,9 +242,7 @@ SepID find_highest_common(SepID n1, SepID n2) {
     return SepID(lvl1, sep1);
 }
 
-/** A should be a symmetric matrix **/
-vector<ClusterID> partition_recursivebissect(SpMat &A, int nlevels, bool verb, MatrixXd* Xcoo) {
-    timer t0 = wctime();
+vector<int> partition_RB(SpMat &A, int nlevels, bool verb, MatrixXd* Xcoo) {
     bool geo = (Xcoo != nullptr);
     if(verb && geo) printf("Geometric RB partitioning & ordering\n");
     if(verb && !geo) printf("Algebraic RB partitioning & ordering\n");
@@ -257,13 +270,25 @@ vector<ClusterID> partition_recursivebissect(SpMat &A, int nlevels, bool verb, M
         int one = 1;
         int objval;
         int nparts = pow(2, nlevels-1);
-        assert(sizeof(idx_t) == sizeof(int));
-        int options[METIS_NOPTIONS];
-        options[METIS_OPTION_SEED] = 7103855;        
-        assert(METIS_OK == METIS_SetDefaultOptions(options));
-        assert(METIS_OK == METIS_PartGraphRecursive(&size, &one, colptr.data(), rowval.data(),
-                                                    nullptr, nullptr, nullptr, &nparts, nullptr, nullptr, options, &objval, parts.data()));
+        if(nparts == 1) {
+            // Meties doesn't like nparts == 1 and memcheck finds some errors
+            parts = vector<int>(size, 0);
+        } else {
+            int options[METIS_NOPTIONS];
+            options[METIS_OPTION_SEED] = 7103855;        
+            assert(METIS_OK == METIS_SetDefaultOptions(options));
+            assert(METIS_OK == METIS_PartGraphRecursive(&size, &one, colptr.data(), rowval.data(),
+                                                        nullptr, nullptr, nullptr, &nparts, nullptr, nullptr, options, &objval, parts.data()));
+        }        
     }
+    return parts;
+}
+
+/** A should be a symmetric matrix **/
+vector<ClusterID> partition_recursivebissect(SpMat &A, int nlevels, bool verb, MatrixXd* Xcoo) {
+    timer t0 = wctime();
+    int size = A.rows();
+    vector<int> parts = partition_RB(A, nlevels, verb, Xcoo);
     timer t1 = wctime();
     if(verb) printf("Recursive bisection time: %3.2e s.\n", elapsed(t0, t1));
     /**
@@ -353,36 +378,6 @@ vector<ClusterID> partition_recursivebissect(SpMat &A, int nlevels, bool verb, M
             clusters[i].r = self;
         }
     }
-    // cout << "Self:\n";
-    // {
-    //     int nn = (int)(pow(double(size), 0.5));
-    //     for(int i = 0; i < nn; i++) {
-    //         for(int j = 0; j < nn; j++) {
-    //             cout << clusters[i + j*nn].self << " ";
-    //         }
-    //         cout << "\n";
-    //     }
-    // }
-    // cout << "Left:\n";
-    // {
-    //     int nn = (int)(pow(double(size), 0.5));
-    //     for(int i = 0; i < nn; i++) {
-    //         for(int j = 0; j < nn; j++) {
-    //             cout << clusters[i + j*nn].l << " ";
-    //         }
-    //         cout << "\n";
-    //     }
-    // }
-    // cout << "Right:\n";
-    // {
-    //     int nn = (int)(pow(double(size), 0.5));
-    //     for(int i = 0; i < nn; i++) {
-    //         for(int j = 0; j < nn; j++) {
-    //             cout << clusters[i + j*nn].r << " ";
-    //         }
-    //         cout << "\n";
-    //     }
-    // }
     return clusters;
 }
 
@@ -480,4 +475,6 @@ vector<ClusterID> partition_modifiedND(SpMat &A, int nlevels, bool verb, bool us
                  depth+1, elapsed(t0000, t0001), sepsstats.getCount(), sepsstats.getMin(), sepsstats.getMax(), sepsstats.getMean());
     }
     return part;   
+}
+
 }

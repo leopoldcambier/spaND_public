@@ -6,14 +6,13 @@
 #include "mfem.hpp"
 #include <fstream>
 #include <iostream>
-#include "tree.h"
-#include "util.h"
-#include "is.h"
+#include "spaND.h"
 #include "mfem_util.h"
 
 using namespace std;
 using namespace mfem;
 using namespace Eigen;
+using namespace spaND;
 
 int main(int argc, char *argv[])
 {
@@ -249,11 +248,11 @@ int main(int argc, char *argv[])
     timer t0 = wctime();
     t.partition(A2);
     t.assemble(A2);
-    int err = t.factorize();
-    timer t3 = wctime();
-    cout << ">>>>t_F=" << elapsed(t0, t3) << endl;
-    t.print_log();
-    if(err == 0) {
+    try {
+        t.factorize();
+        timer t3 = wctime();
+        cout << ">>>>t_F=" << elapsed(t0, t3) << endl;
+        t.print_log();
         int iter = cg(A2, b2, x2, t, 500, 1e-12, true);
         timer t4 = wctime();
         cout << "CG: #iterations: " << iter << ", residual |Ax-b|/|b|: " << (A2*x2-b2).norm() / b2.norm() << endl;
@@ -269,7 +268,8 @@ int main(int argc, char *argv[])
                 cout << ">>>>Preservation error=" << error << endl;
             }
         }
-    } else {
+    } catch (std::exception& ex) {
+        cout << ex.what();
         cout << ">>>>t_S=0" << endl;
         cout << ">>>>NOT SPD" << endl;
     }

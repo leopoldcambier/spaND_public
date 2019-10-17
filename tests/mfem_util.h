@@ -15,7 +15,7 @@ void eigen2mfem(Eigen::VectorXd &a, mfem::Vector &b) {
     }
 }
 
-SpMat mfem2eigen(mfem::SparseMatrix &A) {
+spaND::SpMat mfem2eigen(mfem::SparseMatrix &A) {
     int N = A.Height();
     int M = A.Width();
     int nnz = A.NumNonZeroElems();
@@ -32,7 +32,7 @@ SpMat mfem2eigen(mfem::SparseMatrix &A) {
        }
     }
     assert(l == nnz);
-    SpMat B(N,M);
+    spaND::SpMat B(N,M);
     B.setFromTriplets(triplets.begin(), triplets.end());
     return B;
 }

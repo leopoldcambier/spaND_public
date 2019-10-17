@@ -14,9 +14,10 @@
 #include <numeric>
 #include <assert.h>
 #include <limits>
-#include "util.h"
-#include <Eigen/Core>
-#include <Eigen/SparseCore>
+
+#include "spaND.h"
+
+namespace spaND {
 
 // Describes the ordering
 struct SepID {
@@ -79,6 +80,7 @@ ClusterID merge_if(ClusterID& c, int lvl);
 std::ostream& operator<<(std::ostream& os, const SepID& s);
 std::ostream& operator<<(std::ostream& os, const ClusterID& c);
 
+std::vector<int> partition_RB(SpMat &A, int nlevels, bool verb, Eigen::MatrixXd* Xcoo);
 void partition_metis(std::vector<int> &colptr, std::vector<int> &rowval, std::vector<int> &colptrtmp, std::vector<int> &rowvaltmp, std::vector<int> &dofs, std::vector<int> &parts, bool useVertexSep);
 void partition_geo(std::vector<int> &colptr, std::vector<int> &rowval, std::vector<int> &dofs, std::vector<int> &parts, Eigen::MatrixXd *X, std::vector<int> &invp);
 std::vector<ClusterID> partition_modifiedND(SpMat &A, int nlevels, bool verb, bool useVertexSep, Eigen::MatrixXd* Xcoo);
@@ -86,5 +88,7 @@ std::vector<ClusterID> partition_modifiedND(SpMat &A, int nlevels, bool verb, bo
 int part_at_lvl(int part_leaf, int lvl, int nlevels);
 SepID find_highest_common(SepID n1, SepID n2);
 std::vector<ClusterID> partition_recursivebissect(SpMat &A, int nlevels, bool verb, Eigen::MatrixXd* Xcoo);
+
+}
 
 #endif

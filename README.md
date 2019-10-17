@@ -4,7 +4,7 @@ Repository for the spaND algorithm (https://arxiv.org/abs/1901.02971).
 ![Partition pic](https://raw.githubusercontent.com/leopoldcambier/spaND_public/stable/partition_64x64.png "Partitioning output")
 
 ## Disclaimer
-This is very researchy-hacky code. 
+This is very researchy code. 
 The goal is to easily experiments various kinds of sparsification techniques, with reasonnable performances.
 This is *not* production-ready code. I am not a C++ guru and many things are very imperfect and may break if you try too much :-)
 
@@ -15,19 +15,19 @@ This is indicated when needed.
 
 Necessary:
 - Download Eigen (header library only) : http://eigen.tuxfamily.org/index.php?title=Main_Page
-- Download linalgCpp (header library only) : https://github.com/leopoldcambier/linalgCpp
-- Download, build and install Metis in **Int 32 bits mode** : http://glaros.dtc.umn.edu/gkhome/metis/metis/overview
+- Download, build and install Metis in **Int 32 bits mode** : http://glaros.dtc.umn.edu/gkhome/metis/metis/overview (so that you can pass it `int`s)
 - Download, build and install Openblas : https://www.openblas.net/ or Intel MKL
 
-Optional:
+Optional, for testing and custom experiments only:
 - Download, build and install Mfem : https://mfem.org/
 - Download, build and install googletest : https://github.com/google/googletest
 
 Then
 
-1. Create and `obj/` directory:
+1. Create an `obj/` qnd `build/` directory:
 
-    `mkdir obj`.
+    `mkdir obj`
+    `mkdir build`
     
 2. Copy one of the file in the `tests/Makefile-confs` folder and create a `tests/Makefile.conf` file with your system settings. For instance 
 
@@ -35,14 +35,10 @@ Then
     
     You need to set the following variables in `Makefile.conf`:
     
-    - `USE_MKL` to either 0 (not using MKL) or 1 (using MKL - this is because MKL requires specific build flags). If you have both, you can set it at build time (see below.).
-    - `CC` should be your C++ compiler (needs to support -std=c++11)
-    - `EIGENDIR` should point to Eigen's root
-    - `BLASDIR` should point to BLAS's include
-    - `BLASLIB` should point to BLAS's lib
-    - `METISDIR` should point to METIS's include
-    - `METISLIB` should point to METIS's libmetis
-    - `MMIODIR` should point to MMIO's (a subcomponent of linalgCpp) directory, like $(HOME)/git/linalgCpp/mmio if you cloned linalgCpp in $(HOME)/git
+    - `USE_MKL` to either 0 (not using MKL) or 1 (using MKL - this is because MKL requires specific build flags). If you have both, you can set it at build time (see below.). If unset, default is 0.
+    - `CC` should be your C++ compiler (needs to support -std=c++14)
+    - `EXTRA_INCDIR` should contains path to the above libraries headers (Eigen, Metis, Blas/Lapack, linalgCpp) if not in your compiler path (may or may not be needed)
+    - `EXTRA_LINKDIR`should contains path to the above libraries objects (Metis, Blas/Lapack), if not in your compiler path (may or may not be needed)
     - `GTEST` should point to googletest folder (optional)
     - `MFEMDIR` should point to MFEM's root (optional)
     - `MFEMLIB` should point to MFEM's root (optional)

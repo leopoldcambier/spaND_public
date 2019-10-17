@@ -7,6 +7,7 @@
 #include <Eigen/Core>
 #include <Eigen/SparseCore>
 #include <Eigen/Householder>
+#include <Eigen/LU>
 #include <assert.h>
 #include <time.h>
 #include <sys/time.h>
@@ -19,15 +20,16 @@
 #include <lapacke.h>
 #endif
 
-typedef Eigen::SparseMatrix<double, 0, int> SpMat;
-typedef Eigen::VectorBlock<Eigen::Matrix<double, -1,  1, 0, -1,  1>, -1> Segment;
-typedef Eigen::Block<Eigen::Matrix<double, -1, -1, 0, -1, -1>, -1, -1> MatrixBlock;
+#include "spaND.h"
+
+namespace spaND {
 
 bool are_connected(Eigen::VectorXi &a, Eigen::VectorXi &b, SpMat &A);
 bool should_be_disconnected(int lvl1, int lvl2, int sep1, int sep2);
 double elapsed(timeval& start, timeval& end);
 void swap2perm(Eigen::VectorXi* swap, Eigen::VectorXi* perm);
-bool isperm(Eigen::VectorXi* perm);
+bool isperm(const Eigen::VectorXi* perm);
+Eigen::VectorXi invperm(const Eigen::VectorXi& perm);
 SpMat symmetric_graph(SpMat& A);
 
 typedef timeval timer;
@@ -48,15 +50,17 @@ void gemm(Eigen::MatrixXd* A, Eigen::MatrixXd* B, Eigen::MatrixXd* C, CBLAS_TRAN
 Eigen::MatrixXd* gemm_new(Eigen::MatrixXd* A, Eigen::MatrixXd* B, CBLAS_TRANSPOSE tA, CBLAS_TRANSPOSE tB, double alpha);
 
 /**
- * C <- C - A * A^T
+ * C <- alpha A * A^T + beta C (or A^T * A)
  */
-void syrk(Eigen::MatrixXd* A, Eigen::MatrixXd* C);
+void syrk(Eigen::MatrixXd* A, Eigen::MatrixXd* C, CBLAS_TRANSPOSE tA, double alpha, double beta);
 
 /** 
  * A <- L, L L^T = A
  * Return != 0 if potf failed (not spd)
  */ 
 int potf(Eigen::MatrixXd* A);
+
+int ldlt(Eigen::MatrixXd* A, Eigen::MatrixXd* L, Eigen::VectorXd* d, Eigen::VectorXi* p, double* rcond);
 
 /**
  * A <- [L\U] (lower and upper)
@@ -69,10 +73,26 @@ int potf(Eigen::MatrixXd* A);
 int getf(Eigen::MatrixXd* A, Eigen::VectorXi* swap);
 
 /**
+ * A = P L U Q
+ * A <- [L\U] (lower and upper)
+ * L is unit diagonal
+ * U is not
+ */
+void fpgetf(Eigen::MatrixXd* A, Eigen::VectorXi* p, Eigen::VectorXi* q);
+
+/**
+ * A = L U
+ * breaks down into L & U, and split the diagonal between the two
+ * A = L * (D + U') = L * D (I + D^-1 U') = { L * |D|^1/2 } { |D|^1/2 sign(D) (I + D^-1 U') }
+ */
+void split_LU(Eigen::MatrixXd* A, Eigen::MatrixXd* L, Eigen::MatrixXd* U);
+
+/**
  * Compute an estimated 1-norm condition number of A using its LU or Cholesky factorization
  */
 double rcond_1_getf(Eigen::MatrixXd* A_LU, double A_1_norm);
 double rcond_1_potf(Eigen::MatrixXd* A_LLT, double A_1_norm);
+double rcond_1_trcon(Eigen::MatrixXd* LU, char uplo, char diag);
 
 /**
  * B <- B * L^(-1)
@@ -205,6 +225,9 @@ Eigen::VectorXd random(int size, int seed);
 
 Eigen::MatrixXd random(int rows, int cols, int seed);
 
+// Set Eigen::MatrixXd to zero using memset
+void setZero(Eigen::MatrixXd* A);
+
 // Print vector
 template<typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
@@ -214,6 +237,23 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& v) {
     os << std::endl;
     return os;
 }
+
+// Range
+template<typename T>
+struct ItRange
+{
+    public:
+        ItRange(const T& begin, const T& end) : begin_(begin), end_(end) {}
+        const T& begin() const {
+            return this->begin_;
+        }
+        const T& end() {
+            return this->end_;
+        }
+    private:
+        T begin_;
+        T end_;
+};
 
 /**
  * Statistics and Logging
@@ -226,29 +266,79 @@ struct Profile {
         double spars;
         double merge;
 
-        double mergealloc;
-        double mergecopy;
+        double elim_pivot;
+        double elim_panel;
+        double elim_schur;
 
-        double geqp3;
-        double geqrf;
+        double scale_pivot;
+        double scale_panel;
+
+        double spars_assmb;
+        double spars_spars;
+        double spars_scatt;
+
+        double merge_alloc;
+        double merge_copy;
+
         double potf;
+        double ldlt;
         double trsm;
         double gemm;
+        double geqp3;
+        double geqrf;
+        double syev;
+        double gesvd;
+        double getf;
 
         double buildq;
         double scattq;
         double perma;
         double scatta;
-        double prese;
         double assmb;
         double phi;
 
         Profile() :
             elim(0), scale(0), spars(0), merge(0), 
-            mergealloc(0), mergecopy(0),
-            geqp3(0), geqrf(0), potf(0), trsm(0), gemm(0),
-            buildq(0), scattq(0), perma(0), scatta(0), prese(0), assmb(0), phi(0)
+            elim_pivot(0), elim_panel(0), elim_schur(0),
+            scale_pivot(0), scale_panel(0), 
+            spars_assmb(0), spars_spars(0), spars_scatt(0),
+            merge_alloc(0), merge_copy(0),
+            potf(0), ldlt(0), trsm(0), gemm(0), geqp3(0), geqrf(0), syev(0), gesvd(0), getf(0),
+            buildq(0), scattq(0), perma(0), scatta(0), assmb(0), phi(0)
             {}
+};
+
+struct PivotFlops {
+    long rows;
+    double time;
+};
+
+struct PanelFlops {
+    long rows;
+    long cols;
+    double time;
+};
+
+struct GemmFlops {
+    long rows;
+    long cols;
+    long inner;
+    double time;
+};
+
+struct RRQRFlops {
+    long rows;
+    long cols;
+    double time;
+};
+
+struct ProfileFlops {
+    public:
+        std::vector<PivotFlops> pivot;
+        std::vector<PanelFlops> panel;
+        std::vector<GemmFlops>  gemm;
+        std::vector<RRQRFlops>  rrqr;
+        ProfileFlops() {};
 };
 
 template<typename T>
@@ -282,17 +372,34 @@ struct Log {
         long long int fact_nnz;
         Stats<int> rank_before;
         Stats<int> rank_after;
+        int ignored;
         Stats<int> nbrs;
-        Stats<double> cond_diag;
-        Stats<double> norm_diag;        
+
+        Stats<double> cond_diag_elim;
+        Stats<double> norm_diag_elim;
+        Stats<double> cond_U_elim;
+        Stats<double> cond_L_elim;
+
+        Stats<double> cond_diag_scal;
+        Stats<double> norm_diag_scal;
+        Stats<double> cond_U_scal;
+        Stats<double> cond_L_scal;
+
+        double Asym_before_scaling;
+        double Asym_after_scaling;        
+        Stats<double> Anorm_before_lower;
+        Stats<double> Anorm_before_upper;
+        Stats<double> Anorm_after_lower;
+        Stats<double> Anorm_after_upper;
     
         Log() :
             dofs_nd(0),
             dofs_left_nd(0), dofs_left_elim(0), dofs_left_spars(0),
-            fact_nnz(0),
-            rank_before(Stats<int>()), rank_after(Stats<int>()), nbrs(Stats<int>()),
-            cond_diag(Stats<double>()), norm_diag(Stats<double>())
+            fact_nnz(0), ignored(0),
+            Asym_before_scaling(0), Asym_after_scaling(0)
             {}
 };
+
+}
 
 #endif

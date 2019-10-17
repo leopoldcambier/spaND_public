@@ -1,14 +1,13 @@
 #include <iostream>
 #include <fstream>
-#include "tree.h"
-#include "util.h"
-#include "is.h"
+#include "spaND.h"
 #include <Eigen/IterativeLinearSolvers>
 #include <unsupported/Eigen/IterativeSolvers>
 #include "mmio.hpp"
 
 using namespace Eigen;
 using namespace std;
+using namespace spaND;
 
 int main(int argc, char* argv[]) {
     assert(argc == 5);
@@ -46,8 +45,12 @@ int main(int argc, char* argv[]) {
     timer part = wctime();
     t.assemble(A);
     timer ass = wctime();
-    int err = t.factorize();
-    assert(err == 0);
+    try {
+        t.factorize();
+    } catch (exception& ex) {
+        cout << ex.what();
+        exit(1);
+    }
     timer end = wctime();
     t.print_log();
     cout << "Timings:" << endl << "  Partition: " << elapsed(start,part) << " s." << endl << "  Assembly: " << elapsed(part,ass) << " s." << endl << "  Factorization: " << elapsed(ass, end) << " s." << endl;

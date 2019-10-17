@@ -34,14 +34,13 @@
 #include <fstream>
 #include <iostream>
 #include <algorithm>
-#include "util.h"
-#include "tree.h"
-#include "is.h"
+#include "spaND.h"
 #include "mfem_util.h"
 #include "mmio.hpp"
 
 using namespace std;
 using namespace mfem;
+using namespace spaND;
 
 // Define the analytical solution and forcing terms / boundary conditions
 void uFun_ex(const Vector & x, Vector & u);
@@ -228,7 +227,7 @@ int main(int argc, char *argv[])
    cout << A.rows() << "x" << A.cols() << " NNZ ? " << A.nonZeros() << endl;
 
    // Add negative bottom right diagonal for Aprec
-   double Anorm = A.norm();
+   // double Anorm = A.norm();
    for(int i = 0; i < Wsize; i++) {
       triplets.push_back({Rsize + i, Rsize + i, -sp_eps});
    }
@@ -316,9 +315,10 @@ int main(int argc, char *argv[])
    t.assemble(Aprec);
    t.set_monitor_condition_pivots(true);
    t.set_scaling_kind(ScalingKind::SVD);
-   int err = t.factorize();
-   if(err != 0) {
-      exit(err);
+   try {
+      t.factorize();
+   } catch (std::exception& ex) {
+      cout << ex.what();
    }
    t.print_log();
    Eigen::VectorXd rhse = mfem2eigen(rhs);

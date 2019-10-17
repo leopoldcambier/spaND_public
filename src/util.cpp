@@ -1,7 +1,9 @@
-#include "util.h"
+#include "spaND.h"
 
 using namespace Eigen;
 using namespace std;
+
+namespace spaND {
 
 bool are_connected(VectorXi &a, VectorXi &b, SpMat &A) {
     int  bsize = b.size();
@@ -85,7 +87,7 @@ void swap2perm(Eigen::VectorXi* swap, Eigen::VectorXi* perm) {
     }
 }
 
-bool isperm(Eigen::VectorXi* perm) {
+bool isperm(const Eigen::VectorXi* perm) {
     int n = perm->size();
     VectorXi count = VectorXi::Zero(n);
     for(int i = 0;i < n; i++) {
@@ -94,6 +96,16 @@ bool isperm(Eigen::VectorXi* perm) {
         count[pi] += 1;
     }
     return (count.cwiseEqual(1)).all();
+}
+
+Eigen::VectorXi invperm(const Eigen::VectorXi& perm) {
+    assert(isperm(&perm));
+    Eigen::VectorXi invperm(perm.size());
+    for(int i = 0; i < perm.size(); i++) {
+        invperm[perm[i]] = i;
+    }
+    assert(isperm(&invperm));
+    return invperm;    
 }
 
 size_t hashv(vector<size_t> vals) {
@@ -133,13 +145,14 @@ MatrixXd* gemm_new(Eigen::MatrixXd* A, Eigen::MatrixXd* B, CBLAS_TRANSPOSE tA, C
     return C;
 }
 
-void syrk(MatrixXd* A, MatrixXd* C) {
+void syrk(MatrixXd* A, MatrixXd* C, CBLAS_TRANSPOSE tA, double alpha, double beta) {
     int n = C->rows();
-    int k = A->cols();
+    int k = (tA == CblasNoTrans ? A->cols() : A->rows());
     assert(C->cols() == n);
     if (n == 0 || k == 0)
         return;
-    cblas_dsyrk(CblasColMajor, CblasLower, CblasNoTrans, n, k, -1.0, A->data(), n, 1.0, C->data(), n);
+    int lda = A->rows();
+    cblas_dsyrk(CblasColMajor, CblasLower, tA, n, k, alpha, A->data(), lda, beta, C->data(), n);
 }
 
 int potf(MatrixXd* A) {
@@ -151,17 +164,66 @@ int potf(MatrixXd* A) {
     return info;
 }
 
-int getf(Eigen::MatrixXd* A, Eigen::VectorXi* swap) {
+int ldlt(Eigen::MatrixXd* A, Eigen::MatrixXd* L, Eigen::VectorXd* d, Eigen::VectorXi* p, double* rcond) {
+    if(A->rows() == 0) return 0;
+    LDLT<Ref<MatrixXd>, Lower> ldlt(*A);
+    if(ldlt.info() != ComputationInfo::Success) {
+        return 1;
+    }
+    (*rcond) = ldlt.rcond();
+    VectorXd halfD = ldlt.vectorD().cwiseAbs().cwiseSqrt();
+    *d = ldlt.vectorD().cwiseSign();
+    (*L) = ldlt.matrixL();
+    (*L) = (*L) * halfD.asDiagonal();
+    VectorXi swap = ldlt.transpositionsP().indices();
+    swap2perm(&swap, p); 
+    return 0;
+}
+
+int getf(Eigen::MatrixXd* A, Eigen::VectorXi* p) {
     int n = A->rows();
     assert(A->cols() == n);
-    assert(swap->size() == n);
+    assert(p->size() == n);
+    VectorXi swap(p->size());
     if(n == 0)
         return 0;
-    int info = LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, n, A->data(), n, swap->data());
-    for(int i = 0; i < n; i++) {
-        (*swap)[i] -= 1;
+    int info = LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, n, A->data(), n, swap.data());
+    if(info != 0) {
+        return info;
+    } else {
+        for(int i = 0; i < n; i++) {
+            (swap)[i] -= 1;
+        }
+        swap2perm(&swap, p);
+        return info;
     }
-    return info;
+}
+
+void fpgetf(Eigen::MatrixXd* A, Eigen::VectorXi* p, Eigen::VectorXi* q) {
+    assert(A->cols() == A->rows());
+    assert(p->size() == A->cols());
+    assert(q->size() == A->cols());
+    if(A->rows() == 0) return;
+    Eigen::FullPivLU<Eigen::Ref<Eigen::MatrixXd>> pluq(*A);
+    *p = invperm(pluq.permutationP().indices());
+    *q = invperm(pluq.permutationQ().indices());
+}
+
+// A = L * (D + U') = L * D (I + D^-1 U') = { L * |D|^1/2 } { |D|^1/2 sign(D) (I + D^-1 U') }
+void split_LU(Eigen::MatrixXd* A, Eigen::MatrixXd* L, Eigen::MatrixXd* U) {
+    assert(A->rows() == A->cols());
+    assert(L->rows() == L->cols());
+    assert(U->rows() == U->cols());
+    assert(A->rows() == L->rows());
+    assert(A->rows() == U->rows());
+    VectorXd d = A->diagonal();
+    *L = A->triangularView<StrictlyLower>();            
+    *U = A->triangularView<StrictlyUpper>();
+    *U = d.cwiseInverse().asDiagonal() * (*U);
+    L->diagonal() = VectorXd::Ones(A->rows());
+    U->diagonal() = VectorXd::Ones(A->rows());
+    *L = (*L) * d.cwiseAbs().cwiseSqrt().asDiagonal();
+    *U = (d.cwiseSign().cwiseProduct(d.cwiseAbs().cwiseSqrt())).asDiagonal() * (*U); 
 }
 
 double rcond_1_getf(Eigen::MatrixXd* A_LU, double A_1_norm) {
@@ -178,6 +240,15 @@ double rcond_1_potf(Eigen::MatrixXd* A_LLT, double A_1_norm) {
     assert(A_LLT->cols() == n);
     double rcond = 10.0;
     int info = LAPACKE_dpocon(LAPACK_COL_MAJOR, 'L', n, A_LLT->data(), n, A_1_norm, &rcond);
+    assert(info == 0);
+    return rcond;
+}
+
+double rcond_1_trcon(Eigen::MatrixXd* LU, char uplo, char diag) {
+    assert(LU->rows() == LU->cols());
+    if(LU->rows() == 0) return 1.0;
+    double rcond;
+    int info = LAPACKE_dtrcon(LAPACK_COL_MAJOR, '1', uplo, diag, LU->rows(), LU->data(), LU->rows(), &rcond);
     assert(info == 0);
     return rcond;
 }
@@ -273,7 +344,7 @@ void ormqr_trans(MatrixXd* v, VectorXd* h, Segment* x) {
     int k = v->cols();
     assert(h->size() == k);
     assert(v->rows() == m);
-    if (m == 0) 
+    if (m == 0 || k == 0) 
         return;
     int info = LAPACKE_dormqr(LAPACK_COL_MAJOR, 'L', 'T', m, 1, k, v->data(), m, h->data(), x->data(), m); 
     assert(info == 0);
@@ -291,6 +362,8 @@ void ormqr(MatrixXd* v, VectorXd* h, MatrixXd* A, char side, char trans) {
         assert(k <= m);
     if(side == 'R') // A * Q or A * Q^T
         assert(k <= n);
+    if (k == 0)
+        return; // No reflectors, so nothing to do
     int info = LAPACKE_dormqr(LAPACK_COL_MAJOR, side, trans, m, n, k, v->data(), v->rows(), h->data(), A->data(), m);
     assert(info == 0);
 }
@@ -300,7 +373,7 @@ void orgqr(Eigen::MatrixXd* v, Eigen::VectorXd* h) {
     int m = v->rows();
     int k = v->cols();
     assert(h->size() == k);
-    if(m == 0)
+    if(m == 0 || k == 0)
         return;
     int info = LAPACKE_dorgqr(LAPACK_COL_MAJOR, m, k, k, v->data(), m, h->data());
     assert(info == 0);
@@ -495,4 +568,17 @@ MatrixXd random(int rows, int cols, int seed) {
         }
     }
     return A;
+}
+
+
+void setZero(Eigen::MatrixXd* A) {
+#if 0
+    A->setZero();
+#else
+    // Probably not super portable. Should be on all systems implementing IEC 60559 (or IEEE 754-1985)
+    memset(A->data(), 0, A->size() * sizeof(double));   // Is ~2x faster than Eigen's setZero()
+    if(A->size() > 0) assert((*A)(A->size()-1) == 0.0); // Fails if double 0 are not sizeof(double) '0' bytes
+#endif
+}
+
 }

@@ -1,7 +1,6 @@
-#ifndef TREE_H
-#define TREE_H
+#ifndef __TREE_H__
+#define __TREE_H__
 
-#include <iostream>
 #include <fstream>
 #include <stdio.h>
 #include <vector>
@@ -16,520 +15,19 @@
 #include <Eigen/QR>
 #include <Eigen/Householder> 
 #include <Eigen/SVD>
-#include <metis.h>
+#include <Eigen/LU>
 #include <numeric>
 #include <assert.h>
 #include <limits>
 #include <memory>
-#include "util.h"
-#include "partition.h"
 
-typedef Eigen::SparseMatrix<double, 0, int> SpMat;
-typedef std::unique_ptr<Eigen::MatrixXd> pMatrixXd;
-typedef std::unique_ptr<Eigen::VectorXd> pVectorXd;
-typedef std::unique_ptr<Eigen::VectorXi> pVectorXi;
+#include "spaND.h"
 
-enum class ScalingKind { SVD, PLU, EVD, LLT };
-enum class PartKind { MND, RB };
-enum class SymmKind { SPD, SYM, GEN };
-
-struct Edge;
-struct Operation;
-struct Cluster;
-
-typedef std::unique_ptr<Cluster> pCluster;
-typedef std::unique_ptr<Edge>    pEdge;
-
-struct pEdgeIt
-{
-    public:
-        pEdgeIt(const std::list<pEdge>::iterator& it);
-        pEdgeIt(const pEdgeIt& other);
-        Edge* operator*() const;
-        pEdgeIt& operator=(const pEdgeIt& other);
-        bool operator!=(const pEdgeIt& other);
-        pEdgeIt& operator++();
-    private:
-        std::list<pEdge>::iterator current;
-};
-
-template<typename T>
-struct ItRange
-{
-    public:
-        ItRange(const T& begin, const T& end) : begin_(begin), end_(end) {}
-        const T& begin() const {
-            return this->begin_;
-        }
-        const T& end() {
-            return this->end_;
-        }
-    private:
-        T begin_;
-        T end_;
-};
-
-struct Cluster {
-    public:
-        /* Cluster info */
-        int start; // start = -1 ==> not a base (bottom leaves) node
-        int size; // x->size() >= this->size. size is the curent size (<= rank). x can be larger is this node got sparsified.
-        int order;
-        bool eliminated;
-        /* Merging business */
-        ClusterID id;
-        ClusterID parentid;
-        Cluster* parent; // not owned
-        std::vector<Cluster*> children; // not owned
-        int posparent;
-        /* Other */
-        pMatrixXd phi;
-        /* Edges holding pieces of the matrix, i.e., an A12 and A21 */
-        std::list<pEdge> edgesOut; // Edges to other, self <= other  (including self)
-        std::list<Edge*> edgesIn;  // Edges from other, other < self (excluding self)
-        /* The solution */
-        pVectorXd x; // x->size() >= this->size
-        /* Temporary values - not owned */
-        Eigen::VectorXd* diag;
-        Eigen::VectorXi* p;
-        Eigen::VectorXd* s;
-        Eigen::MatrixXd* U;
-        Eigen::MatrixXd* VT;
-        Eigen::MatrixXd* Ass;
-        /* Methods */
-        Cluster(int start, int size, ClusterID id, int order) : 
-            start(start), size(size), order(order), eliminated(false), id(id), parentid(ClusterID()),
-            parent(nullptr), posparent(-1),
-            phi(nullptr), x(nullptr), diag(nullptr), p(nullptr), s(nullptr), U(nullptr), VT(nullptr), Ass(nullptr) {
-                assert(start >= 0);
-                set_size(size);
-            }
-        int get_level();
-        void set_size(int size_){
-            size = size_;
-            this->x = std::make_unique<Eigen::VectorXd>(size);
-            this->x->setZero();
-        }
-        bool is_eliminated() {
-            return eliminated;
-        }
-        void set_eliminated() {
-            assert(! eliminated);
-            eliminated = true;
-        }
-        Edge* pivot();
-        ItRange<pEdgeIt> edgesOutNbr();
-        ItRange<pEdgeIt> edgesOutAll();
-        ItRange<std::list<Edge*>::iterator> edgesInNbr();
-        int nnbr_in_self_out();
-        void set_vector(const Eigen::VectorXd& b);
-        void extract_vector(Eigen::VectorXd& b);
-        Segment head_x();
-};
-
-/* An edge holding a piece of the (trailing) matrix */
-struct Edge {
-    public:
-        Cluster* n1;
-        Cluster* n2;
-        pMatrixXd A21; // Lower triangular part or Complete pivot, n2 x n1
-        pMatrixXd A12; // Upper triangular part, n1 x n2
-        Edge(Cluster* n1, Cluster* n2, pMatrixXd A);
-        Edge(Cluster* n1, Cluster* n2, pMatrixXd A, pMatrixXd AT);
-        Eigen::MatrixXd* ALow();
-        Eigen::MatrixXd* AUpp();
-        Eigen::MatrixXd* APiv();
-        void set_APiv(pMatrixXd);
-        void set_ALow(pMatrixXd);
-        void set_AUpp(pMatrixXd);
-        pMatrixXd get_APiv();
-        pMatrixXd get_AUpp();
-        pMatrixXd get_ALow();
-};
-
-/** An operation applied on the matrix **/
-struct Operation {
-    public:
-        virtual void fwd() {};
-        virtual void bwd() {};
-        virtual void diag() {};
-        virtual long long nnz() = 0;
-        virtual std::string name() {
-            return "Operation";
-        };
-        virtual ~Operation() {};
-};
-
-struct Gemm : public Operation {
-    private:
-        Segment xs;
-        Segment xn;
-        pMatrixXd Ans;
-        pMatrixXd Asn; // Asn == nullptr <=> symmetric
-    public:
-        Gemm(Cluster* n1, Cluster* n2, pMatrixXd Ans) : 
-            xs(n1->head_x()), xn(n2->head_x()), Ans(std::move(Ans)), Asn(nullptr) {}
-        Gemm(Cluster* n1, Cluster* n2, pMatrixXd Ans, pMatrixXd Asn) : 
-            xs(n1->head_x()), xn(n2->head_x()), Ans(std::move(Ans)), Asn(std::move(Asn)) {}
-        void fwd() {
-            if(Asn == nullptr) {
-                gemv_notrans(Ans.get(), &xs, &xn);
-            } else {
-                gemv_notrans(Ans.get(), &xs, &xn);
-            }
-        }
-        void bwd() {
-            if(Asn == nullptr) {
-                gemv_trans(Ans.get(), &xn, &xs);
-            } else {
-                gemv_notrans(Asn.get(), &xn, &xs);
-            }
-        }
-        long long nnz() {
-            return xs.size() * xn.size() * (Asn == nullptr ? 1 : 2);
-        }
-        std::string name() {
-            return "Gemm";
-        }
-};
-
-struct GemmDiag : public Operation {
-    private:
-        Segment xs;
-        Segment xn;
-        Eigen::VectorXd* diag;
-        pMatrixXd Ans;        
-    public:
-        GemmDiag(Cluster* n1, Cluster* n2, pMatrixXd Ans, Eigen::VectorXd* diag) : 
-            xs(n1->head_x()), xn(n2->head_x()), diag(diag), Ans(std::move(Ans)) {}
-        void fwd() {   
-            xn -= ((*Ans) * diag->asDiagonal() * xs);
-        }
-        void bwd() {
-            xs -= (diag->asDiagonal() * Ans->transpose() * xn);
-        }
-        long long nnz() {
-            return xs.size() * xn.size();
-        }
-        std::string name() {
-            return "GemmDiag";
-        }
-};
-
-struct Scaling : public Operation {
-    private:
-        Segment xs;
-        pMatrixXd LUss;
-        pVectorXi p; // p == nullptr <=> LLT / p != nullptr <=> PLU
-    public:
-        Scaling(Cluster* n1, pMatrixXd Lss) : 
-            xs(n1->head_x()), LUss(std::move(Lss)),  p(nullptr) {}
-        Scaling(Cluster* n1, pMatrixXd LUss, pVectorXi p) : 
-            xs(n1->head_x()), LUss(std::move(LUss)), p(std::move(p)) {}
-        void fwd() {
-            if(p == nullptr) {
-                trsv(LUss.get(), &xs, CblasLower, CblasNoTrans, CblasNonUnit);
-            } else {
-                xs = p->asPermutation().transpose() * xs;
-                trsv(LUss.get(), &xs, CblasLower, CblasNoTrans, CblasUnit);                
-            }
-        }
-        void bwd() {
-            if(p == nullptr) {
-                trsv(LUss.get(), &xs, CblasLower, CblasTrans, CblasNonUnit);
-            } else {
-                trsv(LUss.get(), &xs, CblasUpper, CblasNoTrans, CblasNonUnit);
-            }
-        }
-        long long nnz() {
-            if(p == nullptr) {
-                return (xs.size() * (xs.size()+1))/2;
-            } else {
-                return (xs.size() * xs.size());
-            }
-        }
-        std::string name() {
-            return "Scaling";
-        }
-};
-
-struct ScalingEVD : public Operation {
-    private:
-        Segment xs;
-        pMatrixXd U;
-        pVectorXd Srsqrt;
-    public:
-        ScalingEVD(Cluster* n, pMatrixXd U, pVectorXd Srsqrt) : 
-            xs(n->head_x()), U(std::move(U)), Srsqrt(std::move(Srsqrt)) {
-                assert(this->Srsqrt->size() == this->U->rows());
-                assert(this->Srsqrt->size() == this->U->cols());
-            }
-        void fwd() {
-            xs = Srsqrt->asDiagonal() * U->transpose() * xs;
-        }
-        void bwd() {
-            xs = (*U) * Srsqrt->asDiagonal() * xs;
-        }
-        long long nnz() {
-            return xs.size() * xs.size() + xs.size();
-        }
-        std::string name() {
-            return "ScalingEVD";
-        }
-};
-
-struct ScalingDiag : public Operation {
-    private:
-        Segment xs;
-        pVectorXd diagV;
-    public:
-        ScalingDiag(Cluster* n, pVectorXd diag) :
-            xs(n->head_x()), diagV(std::move(diag)) { assert(xs.size() == diagV->size()); };
-        void diag() {
-            xs = diagV->asDiagonal() * xs;
-        }
-        long long nnz() {
-            return xs.size();
-        }
-        std::string name() {
-            return "ScalingDiag";
-        }
-};
-
-struct ScalingSVD : public Operation {
-    private:
-        Segment xs;
-        pMatrixXd U;
-        pMatrixXd VT;
-        pVectorXd Srsqrt;
-    public:
-        ScalingSVD(Cluster* n1, pMatrixXd U, pMatrixXd VT, pVectorXd Srsqrt) : 
-            xs(n1->head_x()), U(std::move(U)), VT(std::move(VT)), Srsqrt(std::move(Srsqrt)) {}
-        void fwd() {
-            xs = Srsqrt->asDiagonal() * U->transpose() * xs;
-        }
-        void bwd() {
-            xs = VT->transpose() * Srsqrt->asDiagonal() * xs;
-        }
-        long long nnz() {
-            return xs.size() * xs.size() * 2 + xs.size();
-        }
-        std::string name() {
-            return "ScalingSVD";
-        }
-};
-
-struct SelfElimEVD : public Operation {
-    private:
-        Segment xc;
-        Segment xf;        
-        pMatrixXd U;
-        pVectorXd Srsqrt;
-        pMatrixXd Cfc;
-        pVectorXd diagV;
-    public:
-        SelfElimEVD(Cluster* self, pMatrixXd U, pVectorXd Srsqrt, pMatrixXd Cfc, pVectorXd diag) :
-            xc(self->x->segment(0, Cfc->cols())),
-            xf(self->x->segment(Cfc->cols(), Cfc->rows())),
-            U(std::move(U)), Srsqrt(std::move(Srsqrt)), Cfc(std::move(Cfc)), diagV(std::move(diag))
-        {
-            assert(this->Cfc->rows()  + this->Cfc->cols() == self->size);
-            assert(this->Cfc->rows() == this->U->rows());
-            assert(this->U->rows()   == this->U->cols());
-            assert(this->Cfc->rows() == this->diagV->rows());
-        }
-        void fwd() {
-            xf = Srsqrt->asDiagonal() * U->transpose() * xf;
-            xc -= Cfc->transpose() * xf;            
-        }
-        void bwd() {
-            xf -= (*Cfc) * xc;
-            xf = (*U) * Srsqrt->asDiagonal() * xf;
-        }
-        void diag() {
-            xf = diagV->asDiagonal() * xf;
-        }
-        long long nnz() {
-            return 2 * diagV->size() + U->rows() * U->cols() + Cfc->rows() * Cfc->cols();
-        }
-        std::string name() {
-            return "SelfElimEVD";
-        }
-};
-
-struct SelfElim : public Operation {
-    private:
-        Segment xc;
-        Segment xf;
-        pMatrixXd Cff;
-        pMatrixXd Ccf;
-        pMatrixXd Cfc; // nullptr = symmetric
-        pVectorXi lup; // nullptr = symmetric
-    public:
-        SelfElim(Cluster* self, pMatrixXd Cff, pMatrixXd Ccf) :
-                 xc(self->x->segment(0, Ccf->rows())),
-                 xf(self->x->segment(Ccf->rows(), Ccf->cols())),
-                 Cff(std::move(Cff)), Ccf(std::move(Ccf)), Cfc(nullptr), lup(nullptr) {
-            assert(this->Ccf->rows() + this->Ccf->cols() == self->size);   
-        }
-        SelfElim(Cluster* self, pMatrixXd Cff, pMatrixXd Ccf,
-                 pMatrixXd Cfc, pVectorXi lup) :
-                 xc(self->x->segment(0, Ccf->rows())),
-                 xf(self->x->segment(Ccf->rows(), Ccf->cols())),
-                 Cff(std::move(Cff)), Ccf(std::move(Ccf)), Cfc(std::move(Cfc)), lup(std::move(lup)) {
-            assert(this->Ccf->rows() + this->Ccf->cols() == self->size);
-        }
-        void fwd() {
-            if(Cfc == nullptr) {
-                trsv(Cff.get(), &xf, CblasLower, CblasNoTrans, CblasNonUnit);
-                gemv_notrans(Ccf.get(), &xf, &xc);
-            } else {
-                xf = lup->asPermutation().transpose() * xf;
-                trsv(Cff.get(), &xf, CblasLower, CblasNoTrans, CblasUnit);
-                gemv_notrans(Ccf.get(), &xf, &xc); 
-            }
-        }
-        void bwd() {
-            if(Cfc == nullptr) {
-                gemv_trans(Ccf.get(), &xc, &xf); 
-                trsv(Cff.get(), &xf, CblasLower, CblasTrans, CblasNonUnit);
-            } else {
-                gemv_notrans(Cfc.get(), &xc, &xf);
-                trsv(Cff.get(), &xf, CblasUpper, CblasNoTrans, CblasNonUnit);
-            }
-        }
-        long long nnz() {
-            if(Cfc == nullptr) {
-                return (xf.size() * (xf.size()+1))/2 + xf.size() * xc.size();
-            } else {
-                return (xf.size() * xf.size()) + 2 * xf.size() * xc.size();
-            }
-        } 
-        std::string name() {
-            return "SelfElim";
-        }     
-
-};
-
-struct Permutation : public Operation {
-    private:
-        Segment xs;
-        pVectorXi perm;
-    public:
-        Permutation(Cluster* n1, pVectorXi perm) : 
-            xs(n1->head_x()), perm(std::move(perm)) {}
-        void fwd() {
-            xs = perm->asPermutation().transpose() * xs;
-        }
-        void bwd() {
-            xs = perm->asPermutation() * xs;
-        }
-        long long nnz() {
-            return xs.size();
-        }
-        std::string name() {
-            return "Permutation";
-        }
-};
-
-struct Interpolation : public Operation {
-    private:
-        Segment xc;
-        Segment xf;
-        pMatrixXd Tcf;
-    public:
-        Interpolation(Cluster* n1, pMatrixXd Tcf) : 
-            xc(n1->x->segment(0, Tcf->rows())),
-            xf(n1->x->segment(Tcf->rows(), Tcf->cols())),
-            Tcf(std::move(Tcf)) {
-            assert(this->Tcf->rows() + this->Tcf->cols() == n1->size);
-        }
-        void fwd() {
-            gemv_trans(Tcf.get(), &xc, &xf);
-        }
-        void bwd() {            
-            gemv_notrans(Tcf.get(), &xf, &xc);
-        }
-        long long nnz() {
-            return xc.size() * xf.size();
-        }
-        std::string name() {
-            return "Interpolation";
-        }
-};
-
-struct Orthogonal : public Operation {
-    private:
-        Segment xs;
-        pMatrixXd v;
-        pVectorXd h;
-    public:
-        Orthogonal(Cluster* n1, pMatrixXd v, pVectorXd h) : 
-            xs(n1->head_x()), v(std::move(v)), h(std::move(h)) {}
-        void fwd() {
-            ormqr_trans(v.get(), h.get(), &xs);            
-        }
-        void bwd() {
-            ormqr_notrans(v.get(), h.get(), &xs);
-        }
-        long long nnz() {
-            return xs.size() * xs.size();
-        }
-        std::string name() {
-            return "Orthogonal";
-        }
-};
-
-struct Merge : public Operation {
-    Cluster* parent;
-    // Children are in parent->children
-    public:
-        Merge(Cluster* parent) : parent(parent) {}
-        void fwd() {
-            int k = 0;
-            for(auto c: parent->children) {
-                for(int i = 0; i < c->size; i++) {
-                    (*parent->x)[k] = (*c->x)[i];
-                    k++;
-                }
-            }
-            assert(k == parent->x->size());
-        }
-        void bwd() {
-            int k = 0;
-            for(auto c: parent->children) {
-                for(int i = 0; i < c->size; i++) {
-                    (*c->x)[i] = (*parent->x)[k];
-                    k++;
-                }
-            }
-            assert(k == parent->x->size());
-        }
-        long long nnz() {
-            return 0;
-        }
-        std::string name() {
-            return "Merge";
-        }
-};
+namespace spaND {
 
 class Tree
-{
-    /**
-     * Basic data structure
-     * Given
-     * A = [Ass  Asn1  Asn2]
-     *     [An1s .     .   ]
-     *     [An2s .     .   ]
-     * Ass, An1s, An2s are stored in 'low' edges
-     *      Asn1, Asn2 are stored in 'upp' edges
-     * The first upp edge is always nullptr
-     * The upp edges are all nullptr if symmetry
-     * The low edges are all non nullptr
-     * All edges are from lower -> higher order
-     */
-
-    private:
+{ 
+    protected:
 
         // Parameters
         bool verb;              // Verbose (true) or not
@@ -537,8 +35,6 @@ class Tree
         PartKind part_kind;     // The kind of partitioning (modified ND or recursive bissection)
         bool use_vertex_sep;    // ModifiedND: Wether to use a vertex separator in algebraic partitioning (true) or bipartition (false)
         bool preserve;          // Wether to preserve phi (true) or not
-        int nphis;              // Number of vectors to preserve
-        int N;                  // (Square) matrix size
         int ilvl;               // Level [0...lvl) have been eliminated ; -1 is nothing eliminated
         int nlevels;            // Maximum tree depth        
         double tol;             // Compression tolerance
@@ -547,61 +43,91 @@ class Tree
         ScalingKind scale_kind; // The kind of scaling
         SymmKind symm_kind;     // Wether the matrix is SPD (SPD), symmetric indefinite (SYM) or general unsymmetric (GEN)
         bool ortho;             // Wether to use orthogonal transformation (true) or not
+        
         bool use_want_sparsify; // Wether to use want_sparsify (true) or not
         bool monitor_condition_pivots; // Compute condition number of all pivots (expensive)
+        bool monitor_unsymmetry;       // Monitor symmetry of the matrix (expensive)
+        bool monitor_Rdiag;            // Print diagonal of R to file. Each line is <lvl sigma_1 ... sigma_k>
+        bool monitor_flops;
+
         // Helper parameters
-        bool adaptive;
+        int max_order;
+
         // External data (NOT owned)
         Eigen::MatrixXd* Xcoo;  // The dim x N coordinates matrix
         Eigen::MatrixXd* phi;   // The N x k phi matrix
         
-        /** Stats and info **/
-        long long nnz() ;
-        int ndofs_left();
-        int nclusters_left();
-        void stats();
+        /** Stats and info **/        
+        int ndofs_left() const;
+        int nclusters_left() const;
+        void stats() const;
         bool symmetry() const;
+        void assert_symmetry();
+        int nphis() const;
 
         /** Helpers */
-        void init(int lvl);        
-        // Eliminating
-        int  eliminate_cluster(Cluster*);
-        int  potf_cluster(Cluster*);
-        void trsm_edgeIn(Edge*);
-        void trsm_edgeOut(Edge*);
-        void gemm_edges(Edge*,Edge*);        
-        void update_eliminated_edges_and_delete(Cluster*);
-        // Scaling
-        int  scale_cluster(Cluster*);
+        void init(int lvl);
+
+        // Eliminating & scaling
+        void eliminate_cluster(Cluster*);
+        void scale_cluster(Cluster*);
+
+        // LLT
+        void potf_cluster(Cluster*);
+        void panel_potf(Cluster*);
+        void trsm_potf_edgeIn(Edge*);
+        void trsm_potf_edgeOut(Edge*);
+        
+        // PLUQ
+        void getf_cluster(Cluster*, pMatrixXd*, pMatrixXd*, pVectorXi*, pVectorXi*);
+        void panel_getf(Cluster*, Eigen::MatrixXd*, Eigen::MatrixXd*, Eigen::VectorXi*, Eigen::VectorXi*);
+        void trsm_getf_edgeIn(Edge*, Eigen::MatrixXd*, Eigen::VectorXi*);
+        void trsm_getf_edgeOut(Edge*, Eigen::MatrixXd*, Eigen::VectorXi*);
+
+        // LDLT
+        void ldlt_cluster(Cluster*, pMatrixXd*, pVectorXd*, pVectorXi*);
+        void panel_ldlt(Cluster*, Eigen::MatrixXd*, Eigen::VectorXi*);
+        void trsm_ldlt_edgeIn(Edge*, Eigen::MatrixXd*, Eigen::VectorXi*);
+        void trsm_ldlt_edgeOut(Edge*, Eigen::MatrixXd*, Eigen::VectorXi*);
+        
+        void schur_symmetric(Cluster*);
+        void schur_symmetric(Cluster*, Eigen::VectorXd*);
+        void record_schur_symmetric(Cluster*, Eigen::VectorXd*);
+        void gemm_edges(Edge*, Edge*, Eigen::VectorXd*, bool, bool);
+
         // Sparsification        
         bool want_sparsify(Cluster*);
-        int  sparsify_cluster(Cluster*);
-        void sparsify_adaptive_only(Cluster*);
+        void sparsify_cluster(Cluster*);
+        void sparsify_cluster_farfield(Cluster*);
+        pMatrixXd assemble_Asn(Cluster*, std::function<bool(Edge*)>);                
+        void sparsify_adaptive_only(Cluster* self, std::function<bool(Edge*)> pred);
+        pMatrixXd assemble_Asphi(Cluster*);
         void sparsify_preserve_only(Cluster*);
         void sparsify_preserve_adaptive(Cluster*);
-        pMatrixXd assemble_Asn(Cluster*);
-        pMatrixXd assemble_Asphi(Cluster*);
-        int  sparsify_interp(Cluster*);
-        void drop_all(Cluster*);
-        void scatter_Q(Cluster*, Eigen::MatrixXd*);
-        void scatter_Asn(Cluster*, Eigen::MatrixXd*);
+
         // Merge
-        void update_size(Cluster*);
-        void update_edges(Cluster*);
+        void merge_all();
+        pOperation reset_size(Cluster*, std::map<Cluster*,int>*);
+        void update_edges(Cluster*, std::map<Cluster*,int>*);
+        Cluster* shrink_split_scatter_phi(Cluster*, int, std::function<bool(Edge*)>, Eigen::MatrixXd*, Eigen::VectorXd*, Eigen::MatrixXd*, bool, bool);
 
         // The permutation computed by assembly
         Eigen::VectorXi perm;
 
         // Store the operations
-        std::vector<std::unique_ptr<Operation>> ops;
+        std::list<std::unique_ptr<Operation>> ops;
 
         // Stores the clusters at each level of the cluster hierarchy
         int current_bottom;
         std::vector<std::list<pCluster>> bottoms; // bottoms.size() = nlevels
+        std::vector<pCluster> others;
         const std::list<pCluster>& bottom_current() const;
         const std::list<pCluster>& bottom_original() const;
 
-    public:    
+        // Generate new order ID's
+        int get_new_order();
+
+    public:
 
         // Set all sorts of options
         void set_verb(bool);
@@ -609,33 +135,34 @@ class Tree
         void set_use_geo(bool);
         void set_phi(Eigen::MatrixXd*);
         void set_preserve(bool);
-        void set_use_vertex_sep(bool);
         void set_tol(double);
         void set_skip(int);
-        void set_scale(bool);
-        void set_ortho(bool);
         void set_scaling_kind(ScalingKind);
         void set_symm_kind(SymmKind);
         void set_part_kind(PartKind);
         void set_use_sparsify(bool);
         void set_monitor_condition_pivots(bool);
+        void set_monitor_unsymmetry(bool);
+        void set_monitor_Rdiag(bool);
+        void set_monitor_flops(bool);
 
-        // Basic info
+        // Basic info, export of data and monitoring
         int get_N() const;
-        void print_summary() const;
         Eigen::VectorXi get_assembly_perm() const;
         SpMat get_trailing_mat() const;
         Eigen::MatrixXd get_current_x() const;
-        std::vector<std::vector<ClusterID>> get_clusters_levels() const;
-        void print_ordering_clustering() const;
-        bool is_factorized() const;
+        void print_clusters_hierarchy() const;
+        void print_connectivity() const;
+        std::list<const Cluster*> get_clusters() const;
+        std::vector<int> get_dof2ID() const;
+        int get_nlevels() const;
+        int get_stop() const;
+        long long nnz() const ;
 
         // Publicly visible profiling & other log info
         std::vector<Profile> tprof;
         std::vector<Log> log;
-
-        // Store the ordering & partitioning after partition
-        std::vector<ClusterID> part;
+        std::vector<ProfileFlops> tprof_flops;        
 
         /** Constructor 
          * lvl is the tree depth
@@ -644,9 +171,10 @@ class Tree
 
         /** Partitioning and Ordering 
          * Assumes the matrix A has a symmetric pattern
+         * Returns the partitioning (self, left, right) used, in natural ordering
          */
-        void partition(SpMat&);
-        void partition_rb(SpMat&);
+        std::vector<ClusterID> partition(SpMat&);
+        void partition_lorasp(SpMat&);
 
         /** Initial Matrix Assembly 
          * A can be anything, though to make sense, its pattern should match the one in partition
@@ -655,7 +183,8 @@ class Tree
 
         /** Factorization
          */
-        int factorize();
+        void factorize();
+        void factorize_lorasp();
 
         /** Solve
          * X should have the same size as the matrix
@@ -667,5 +196,64 @@ class Tree
          **/
         void print_log() const;
 };
+
+/** 
+ * Functions operating on Trees
+ */
+
+/** Save data to files **/
+
+/** 
+ * Each ID is an integer, starting from 0, uniquely identitying all clusters.
+ * The cleaf clusters have the first ID's, followed by their parents, then their parents, etc   
+ */
+
+/**
+ * This file gives the coordinates and unique cluster ID for every row/col in the matrix (in its natural ordering)
+ * The first 2 lines are
+ * >>   N ndims L
+ * >>   X;id
+ * where N is the matrix size, ndims is the space dimension (0 if no geometry) and L the number of ND levels
+ * All subsequent lines correspond to a row/col in the matrix (in its natural ordering).
+ * >>   xi_0 ... xi_ndims-1 ; order
+ *      ^-----------------^   ^---^
+ *      Coordinates (if any)   ID
+ */
+void write_clustering(const Tree& t, const Eigen::MatrixXd& X, std::string fn);
+
+/**
+ * This file gives the cluster hierarchy. This is done by listing all children -> parent edges using their ID
+ * The file line is
+ * >>    child;parent
+ * followed by one line for each unique Left clusterID (in no particular order)
+ * >>   child ; parent
+ *      ^---^   ^----^
+ *       ID      ID
+ *  So each line has 2 integers
+ */
+void write_merging(const Tree& t, std::string fn);
+
+/**
+ * This file gives clusters medatada. The first line is
+ * >>    id;lvl;mergeLvl;name
+ * Each line is then
+ * >>    ID ; lvl ; merge level ; string
+ * where lvl is the cluster ND level, merge level is the level at which this cluster "exists" and is merged, and string any string.
+ */
+void write_clusters(const Tree& t, std::string fn);
+
+/**
+ * This prints the cluster ranks and sizes to a file. Lines are
+ * >> ID  size rank
+ *        ^--^ ^--^
+ *         |    Final cluster size (size())
+ *         *-- Original cluster size (original_size())
+ * where there is 1 line per cluster, for all levels (_not_ N*nlevels _nor_ N)
+ */
+void write_stats(const Tree& t, std::string fn);
+
+void write_log_flops(const Tree& t, std::string fn);
+
+}
 
 #endif

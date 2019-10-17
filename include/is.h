@@ -4,13 +4,15 @@
 #include <iostream>
 #include <stdio.h>
 #include <Eigen/Core>
-#include "util.h"
-#include "tree.h"
 
-template<typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-int cg(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, int iters, double tol, bool verb);
+#include "spaND.h"
 
-template<typename MatrixType, typename Rhs, typename Dest, typename Preconditioner>
-int gmres(const MatrixType& mat, const Rhs& rhs, Dest& x, const Preconditioner& precond, int iters, int restart, double tol_error, bool verb);
+namespace spaND {
+
+int cg(const SpMat& mat, const Eigen::VectorXd& rhs, Eigen::VectorXd& x, const Tree& precond, int iters, double tol, bool verb);
+int gmres(const SpMat& mat, const Eigen::VectorXd& rhs, Eigen::VectorXd& x, const Tree& precond, int iters, int restart, double tol_error, bool verb);
+int ir(const SpMat& mat, const Eigen::VectorXd& rhs, Eigen::VectorXd& x, const Tree& precond, int iters, double tol, bool verb);
+
+}
 
 #endif
